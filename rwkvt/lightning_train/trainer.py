@@ -3,6 +3,8 @@ import torch
 from torch.utils.data import DataLoader
 from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 import lightning as pl
+import re
+import numpy as np
 import json
 from rwkvt.trick.lrs import wsd,cos_decay
 
@@ -21,8 +23,6 @@ def my_save(args, trainer, dd, ff):
     else:
         torch.save(dd, ff)
         
-
-
 class train_callback(pl.Callback):
     def __init__(self, args):
         super().__init__()
@@ -42,18 +42,17 @@ class train_callback(pl.Callback):
         # if args.cuda_cleanup > 0:
         #     torch.cuda.empty_cache()
         real_step = trainer.global_step + args.epoch_begin * args.epoch_steps
-
         # LR schedule
         w_step = args.warmup_steps
         if args.lr_final == args.lr_init or args.epoch_count == 0:
             lr = args.lr_init
         else:
             if 'wsd' == args.lr_schedule:
-                lr = wsd(args.lr_init, 0, real_step, (args.epoch_steps*args.epoch_count)//int(args.devices)//args.accumulate_grad_batches,warmup_steps=w_step)
+                lr = wsd(args.lr_init, 0, real_step, trainer.num_training_batches)
             else:
-                lr = cos_decay(args.lr_init, args.lr_final, real_step, (args.epoch_steps*args.epoch_count)//int(args.devices)//args.accumulate_grad_batches)
-
-
+                lr = cos_decay(args.lr_init, args.lr_final, real_step, trainer.num_training_batches)
+        if trainer.global_step < w_step:
+            lr = lr * (0.01 + 0.99 * trainer.global_step / w_step)
 
         if args.weight_decay_final > 0:
             wd_now = args.weight_decay * math.exp(math.log(args.weight_decay_final / args.weight_decay) * progress)
@@ -93,6 +92,7 @@ class train_callback(pl.Callback):
                         name=args.run_name + " " + args.my_timestamp,
                         config=args,
                         save_code=False,
+                        mode="offline",
                     )
                     trainer.my_wandb = wandb
 
@@ -148,6 +148,27 @@ class train_callback(pl.Callback):
                         lll["kt/s"] = kt_s
                     trainer.my_wandb.log(lll, step=int(real_step))
                 self.write_data(trainer.my_loss, t_cost, kt_s)
+
+            if trainer.global_step % 2000 == 0:
+                to_save_dict = pl_module.state_dict()
+                rwkv_dict={}
+                for k, state in to_save_dict.items():
+                    if k.startswith('encoder.') and 'encoder' not in args.train_step:
+                        continue
+
+                    if k.startswith('proj.') and 'proj' not in args.train_step:
+                        continue
+                    rwkv_dict[k] = state
+                to_save_dict = rwkv_dict
+                try:
+                    my_save(
+                        args, trainer,
+                        to_save_dict,
+                        f"{args.proj_dir}/rwkv-step-{trainer.global_step}.pth",
+                    )
+                except Exception as e:
+                    print('Error\n\n', e, '\n\n')
+                
                 
 
     def on_train_epoch_start(self, trainer, pl_module):
@@ -156,7 +177,7 @@ class train_callback(pl.Callback):
             dataset = trainer.train_dataloader.dataset
         else:
             dataset = trainer.train_dataloader.dataset.datasets
-        assert "MyDataset" in str(dataset)
+        # assert "MyDataset" in str(dataset)
         dataset.global_rank = trainer.global_rank
         dataset.real_epoch = int(args.epoch_begin + trainer.current_epoch)
         dataset.world_size = trainer.world_size
@@ -165,6 +186,7 @@ class train_callback(pl.Callback):
     def on_train_epoch_end(self, trainer, pl_module):
         args = self.args
         to_save_dict = {}
+
         if (trainer.is_global_zero) or ('deepspeed_stage_3' in args.strategy):  # save pth
             if (args.epoch_save > 0 and trainer.current_epoch % args.epoch_save == 0) or (trainer.current_epoch == args.epoch_count - 1):
                 if args.data_type == 'wds_img':
@@ -173,33 +195,20 @@ class train_callback(pl.Callback):
                         if k.startswith('encoder.') or k.startswith('decoder.'):
                             to_save_dict[k] = raw_dict[k]
                 else:
-                    # to_save_dict = pl_module.state_dict()
-                    to_save_dict = {k.replace("model.", ""): v for k, v in pl_module.state_dict().items()}
+                    to_save_dict = pl_module.state_dict()
+                rwkv_dict={}
+                for k, state in to_save_dict.items():
+                    if k.startswith('encoder.') and 'encoder' not in args.train_step:
+                        continue
 
-                if args.train_type=='state':
-                    peft_dict = {}
-                    for name, state in to_save_dict.items():
-                        if 'state' in name:
-                            peft_dict[name] = state
-                    to_save_dict = peft_dict
-
-                if args.peft!='none':
-                    peft_dict = {}
-                    for name, state in to_save_dict.items():
-                        if len(args.load_model) == 0:
-                            if 'emb' in name or 'head' in name or 'ln' in name:
-                                peft_dict[name] = state
-                        for part in args.train_parts:
-                            if part in name:
-                                peft_dict[name] = state
-                        if args.peft=='pissa' and ('lora' in name):
-                            peft_dict[name] = state
-                        elif args.peft in name:
-                            peft_dict[name] = state
-
-                    to_save_dict = peft_dict
+                    if k.startswith('proj.') and 'proj' not in args.train_step:
+                        continue
+                    rwkv_dict[k] = state
+                to_save_dict = rwkv_dict
 
                 try:
+
+
                     my_save(
                         args, trainer,
                         to_save_dict,

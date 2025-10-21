@@ -185,8 +185,8 @@ if __name__ == "__main__":
     # elif args.train_type=='infctx':
     #     os.environ["RWKV_TRAIN_TYPE"]='infctx'
 
-    print(f"########## WKV OP           {args.op}               ##########\n" * 3)
-    print(f"########## FUSED OP    {args.fused_kernel}          ##########\n" * 3)
+    print(f"########## WKV OP           {args.op}               ##########\n" * 1)
+    print(f"########## FUSED OP    {args.fused_kernel}          ##########\n" * 1)
     os.environ["WKV"]= args.op
     os.environ["FUSED_KERNEL"] = '1' if args.fused_kernel else '0'
 
