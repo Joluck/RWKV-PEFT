@@ -7,7 +7,7 @@ import re
 import numpy as np
 import json
 from rwkvt.trick.lrs import wsd,cos_decay
-
+import copy
 def my_save(args, trainer, dd, ff):
     if '14b-run1' in ff:
         fn = ff.split('/')[-1]
@@ -185,13 +185,19 @@ class train_callback(pl.Callback):
 
     def on_train_epoch_end(self, trainer, pl_module):
         args = self.args
-        to_save_dict = {}
 
         if (trainer.is_global_zero):
             if args.merge==1:
-                pl_module.model.merge_and_unload()
-                torch.save(pl_module.state_dict(),  f"{args.proj_dir}/rwkv-{args.epoch_begin + trainer.current_epoch}.pth")
-                print("✅ 合并完成，已保存为 rwkv-merged.pth")
+                print("🚧 正在创建临时副本进行合并保存……")
+                model_copy = copy.deepcopy(pl_module.model).to("cpu")  # 不占用显存
+
+                model_copy.merge_and_unload()
+                to_save_dict = {k.replace("base_model.model.", ""): v for k, v in model_copy.state_dict().items()}
+                merged_path = f"{args.proj_dir}/rwkv-{args.epoch_begin + trainer.current_epoch}.pth"
+                torch.save(to_save_dict, merged_path)
+
+                del model_copy
+                print(f"✅ 合并完成，已保存完整模型到: {merged_path}")
             else:
                 peft_save_path = f"{args.proj_dir}-adapter"
                 pl_module.model.save_pretrained(peft_save_path)
