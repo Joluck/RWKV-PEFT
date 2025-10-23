@@ -78,15 +78,16 @@ else:
 
 
 class RWKV(pl.LightningModule):
-    def __init__(self, args):
+    def __init__(self, args, model=None):
         super().__init__()
         self.args = args
-        self.model = RWKVModel(args)
-        if os.environ["FUSED_KERNEL"] == '1':
+        self.model = model if model is not None else RWKVModel(args)
+
+        # 选择损失函数
+        if os.environ.get("FUSED_KERNEL", "0") == '1':
             from rwkvfla.modules import FusedCrossEntropyLoss
             self.criterion = FusedCrossEntropyLoss(inplace_backward=True)
         else:
-            FusedCrossEntropyLoss = None
             self.criterion = nn.CrossEntropyLoss()
 
     def configure_optimizers(self):

@@ -149,25 +149,25 @@ class train_callback(pl.Callback):
                     trainer.my_wandb.log(lll, step=int(real_step))
                 self.write_data(trainer.my_loss, t_cost, kt_s)
 
-            if trainer.global_step % 2000 == 0:
-                to_save_dict = pl_module.state_dict()
-                rwkv_dict={}
-                for k, state in to_save_dict.items():
-                    if k.startswith('encoder.') and 'encoder' not in args.train_step:
-                        continue
+            # if trainer.global_step % 2000 == 0:
+            #     to_save_dict = pl_module.state_dict()
+            #     rwkv_dict={}
+            #     for k, state in to_save_dict.items():
+            #         if k.startswith('encoder.') and 'encoder' not in args.train_step:
+            #             continue
 
-                    if k.startswith('proj.') and 'proj' not in args.train_step:
-                        continue
-                    rwkv_dict[k] = state
-                to_save_dict = rwkv_dict
-                try:
-                    my_save(
-                        args, trainer,
-                        to_save_dict,
-                        f"{args.proj_dir}/rwkv-step-{trainer.global_step}.pth",
-                    )
-                except Exception as e:
-                    print('Error\n\n', e, '\n\n')
+            #         if k.startswith('proj.') and 'proj' not in args.train_step:
+            #             continue
+            #         rwkv_dict[k] = state
+            #     to_save_dict = rwkv_dict
+            #     try:
+            #         my_save(
+            #             args, trainer,
+            #             to_save_dict,
+            #             f"{args.proj_dir}/rwkv-step-{trainer.global_step}.pth",
+            #         )
+            #     except Exception as e:
+            #         print('Error\n\n', e, '\n\n')
                 
                 
 
@@ -187,44 +187,16 @@ class train_callback(pl.Callback):
         args = self.args
         to_save_dict = {}
 
-        if (trainer.is_global_zero) or ('deepspeed_stage_3' in args.strategy):  # save pth
-            if (args.epoch_save > 0 and trainer.current_epoch % args.epoch_save == 0) or (trainer.current_epoch == args.epoch_count - 1):
-                if args.data_type == 'wds_img':
-                    raw_dict = pl_module.state_dict()
-                    for k in raw_dict:
-                        if k.startswith('encoder.') or k.startswith('decoder.'):
-                            to_save_dict[k] = raw_dict[k]
-                else:
-                    to_save_dict = pl_module.state_dict()
-                rwkv_dict={}
-                for k, state in to_save_dict.items():
-                    if k.startswith('encoder.') and 'encoder' not in args.train_step:
-                        continue
-
-                    if k.startswith('proj.') and 'proj' not in args.train_step:
-                        continue
-                    rwkv_dict[k] = state
-                to_save_dict = rwkv_dict
-
-                try:
-
-
-                    my_save(
-                        args, trainer,
-                        to_save_dict,
-                        f"{args.proj_dir}/rwkv-{args.epoch_begin + trainer.current_epoch}.pth",
-                    )
-                except Exception as e:
-                    print('Error\n\n', e, '\n\n')
-
-        if trainer.is_global_zero:  # logging
-            trainer.my_log.write(f"{args.epoch_begin + trainer.current_epoch} {trainer.my_epoch_loss:.6f} {math.exp(trainer.my_epoch_loss):.4f} {trainer.my_lr:.8f} {datetime.datetime.now()} {trainer.current_epoch}\n")
-            trainer.my_log.flush()
-
-            trainer.my_loss_sum = 0
-            trainer.my_loss_count = 0
-            if (args.epoch_begin + trainer.current_epoch) >= args.my_exit:
-                exit(0)
+        if (trainer.is_global_zero):
+            if args.merge==1:
+                pl_module.model.merge_and_unload()
+                torch.save(pl_module.state_dict(),  f"{args.proj_dir}/rwkv-{args.epoch_begin + trainer.current_epoch}.pth")
+                print("✅ 合并完成，已保存为 rwkv-merged.pth")
+            else:
+                peft_save_path = f"{args.proj_dir}-adapter"
+                pl_module.model.save_pretrained(peft_save_path)
+                print(f"✅ 已保存 PEFT adapter 参数到: {peft_save_path}/")
+            
 
 
 @rank_zero_only

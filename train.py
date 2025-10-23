@@ -94,7 +94,7 @@ if __name__ == "__main__":
 
     #Bone
     parser.add_argument("--disha_config", default='{"mode":"mode", "load":"", "r":64}', type=json.loads)
-
+    parser.add_argument("--merge", type=int, default=1, help="1=merge PEFT weights, 0=save PEFT-only")
 
     #quant
     parser.add_argument("--quant", default="none", type=str)
@@ -244,7 +244,7 @@ if __name__ == "__main__":
     ########################################################################################################
 
     from rwkvt.lightning_train.trainer import train_callback
-    from rwkvt.peft.peft_loading import load_peft_model
+    from rwkvt.rwkvpeft.peft_loading import load_peft_model
 
     args, model = load_peft_model(args)
 
