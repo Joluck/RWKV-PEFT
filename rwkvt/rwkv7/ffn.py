@@ -55,7 +55,7 @@ class RWKV_CMix_x070_fla(RWKV_CMix_x070):
         super().__init__(args, layer_id)
         del self.time_shift
 
-    @torch.compile
+    #@torch.compile
     def forward(self, x, attention_mask=None):
         if attention_mask is not None:
             x = x.mul(attention_mask[:, -x.shape[-2]:, None])
