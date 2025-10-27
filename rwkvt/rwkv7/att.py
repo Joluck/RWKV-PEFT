@@ -181,7 +181,7 @@ class RWKV_Tmix_x070_State(RWKV_Tmix_x070):
             self.time_state = nn.Parameter(torch.zeros(self.n_head, self.head_size, self.head_size))
 
 
-    @torch.compile
+    #@torch.compile
     def forward(self, x, v_first, attention_mask=None):
         B, T, C = x.size()
         H = self.n_head
