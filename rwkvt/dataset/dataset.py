@@ -19,6 +19,8 @@ from .mask import generate_mask, create_mask,mask_fn_dict
 pipeline = PIPELINE('rwkv6', "rwkv_vocab_v20230424")
 
 
+# 用法
+
 class MyDataset(Dataset):
     def __init__(self, args, processor=None):
 
@@ -31,12 +33,15 @@ class MyDataset(Dataset):
         elif args.data_type == "jsonl":
             with jsonlines.open(args.data_file) as file:
                 self.data = list(file)
-
+            if args.epoch_steps < len(self.data) :
+                self.data = self.data[:args.epoch_steps]
         elif args.data_type == "binidx":
             self.data = MMapIndexedDataset(args.data_file)
+            self.data = self.data.head(args.epoch_steps)
             self.data_size = len(self.data._bin_buffer) // self.data._index._dtype_size
             rank_zero_info(f"Data has {self.data_size} tokens.")
-        print(len(self.data))
+
+        print(f"Trimmed to {len(self.data)} samples for epoch_steps {args.epoch_steps}.")
     
     def __len__(self):
         return len(self.data)
