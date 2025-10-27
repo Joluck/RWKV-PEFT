@@ -8,20 +8,7 @@ import numpy as np
 import json
 from rwkvt.trick.lrs import wsd,cos_decay
 import copy
-def my_save(args, trainer, dd, ff):
-    if '14b-run1' in ff:
-        fn = ff.split('/')[-1]
-        fff = '/dev/shm/' + fn
-        torch.save(dd, fff)
-        subprocess.Popen(f" aws s3 mv {fff} s3://rwkv-14b-4k/{fn} --quiet", shell=True)
-    elif ('world/14b' in ff) or ('world/7b' in ff):
-        aa = ff.split('/')[1]
-        fn = ff.split('/')[-1]
-        fff = f'/dev/shm/{aa}-{fn}'
-        torch.save(dd, fff)
-        subprocess.Popen(f" aws s3 mv {fff} s3://rwkv-world/{aa}-{fn} --quiet", shell=True)
-    else:
-        torch.save(dd, ff)
+
         
 class train_callback(pl.Callback):
     def __init__(self, args):
@@ -187,21 +174,32 @@ class train_callback(pl.Callback):
         args = self.args
 
         if (trainer.is_global_zero):
-            if args.merge==1:
-                print("🚧 正在创建临时副本进行合并保存……")
-                model_copy = copy.deepcopy(pl_module.model).to("cpu")  # 不占用显存
-
-                model_copy.merge_and_unload()
-                to_save_dict = {k.replace("base_model.model.", ""): v for k, v in model_copy.state_dict().items()}
+            if args.peft in ['none', 'state']:
+                to_save_dict = {k.replace("model.", ""): v for k, v in pl_module.state_dict().items()}
+                if args.peft == 'state':
+                    state_dict = {}
+                    for name, state in to_save_dict.items():
+                        if 'state' in name:
+                            state_dict[name] = state
+                    to_save_dict = state_dict
                 merged_path = f"{args.proj_dir}/rwkv-{args.epoch_begin + trainer.current_epoch}.pth"
                 torch.save(to_save_dict, merged_path)
-
-                del model_copy
-                print(f"✅ 合并完成，已保存完整模型到: {merged_path}")
             else:
-                peft_save_path = f"{args.proj_dir}-adapter"
-                pl_module.model.save_pretrained(peft_save_path)
-                print(f"✅ 已保存 PEFT adapter 参数到: {peft_save_path}/")
+                if args.merge==1:
+                    print("🚧 正在创建临时副本进行合并保存……")
+                    model_copy = copy.deepcopy(pl_module.model).to("cpu")  # 不占用显存
+
+                    model_copy.merge_and_unload()
+                    to_save_dict = {k.replace("base_model.model.", ""): v for k, v in model_copy.state_dict().items()}
+                    merged_path = f"{args.proj_dir}/rwkv-{args.epoch_begin + trainer.current_epoch}.pth"
+                    torch.save(to_save_dict, merged_path)
+
+                    del model_copy
+                    print(f"✅ 合并完成，已保存完整模型到: {merged_path}")
+                else:
+                    peft_save_path = f"{args.proj_dir}-adapter"
+                    pl_module.model.save_pretrained(peft_save_path)
+                    print(f"✅ 已保存 PEFT adapter 参数到: {peft_save_path}/")
             
 
 
