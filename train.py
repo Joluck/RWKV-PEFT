@@ -84,6 +84,12 @@ if __name__ == "__main__":
     #LORA
     parser.add_argument("--lora_config", default='{"lora_load":"", "lora_r":8, "lora_alpha":32, "lora_dropout":0.01}', type=json.loads)
 
+    parser.add_argument(
+        "--peft_config",
+        type=str,
+        default="{}",
+        help="PEFT config JSON string, e.g. '{\"r\":8, \"alpha\":32, \"dropout\":0.05, \"target_modules\":[\"receptance\",\"key\",\"value\",\"output\"]}'"
+    )
 
     # #LISA
     # parser.add_argument("--lisa_config", default='{"lisa_r":2, "lisa_k":100}', type=json.loads)
@@ -244,7 +250,7 @@ if __name__ == "__main__":
     ########################################################################################################
 
     from rwkvt.lightning_train.trainer import train_callback
-    from rwkvt.rwkvpeft.peft_loading import load_peft_model
+    from rwkvt.peft_loading import load_peft_model
     from rwkvt.dataset.dataset import MyDataModule
     args, model = load_peft_model(args)
 
