@@ -5,7 +5,7 @@ triton
 rwkv-fla
 rwkv
 transformers
-lightning
+lightning>=2.0.0
 datasets
 jsonlines
 wandb

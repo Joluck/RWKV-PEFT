@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from rwkvt.infctx_module import *
 
-from rwkvt.peft.rwkvLinear import make_linear_att
 from rwkvt.operator.rwkvop import RUN_CUDA_RWKV5
 from torch.nn import functional as F
 
@@ -54,12 +53,12 @@ class RWKV_TimeMix_RWKV5(nn.Module):
             self.time_faaaa = nn.Parameter(tmp.reshape(self.n_head, self.head_size))
 
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
-        self.receptance = make_linear_att(args.n_embd, args.dim_att, bias=False)
-        self.key = make_linear_att(args.n_embd, args.dim_att, bias=False)
-        self.value = make_linear_att(args.n_embd, args.dim_att, bias=False)
+        self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
 
-        self.output = make_linear_att(args.dim_att, args.n_embd, bias=False)
-        self.gate = make_linear_att(args.n_embd, args.dim_att, bias=False)
+        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att)
 
     def jit_func(self, x):

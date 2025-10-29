@@ -2,7 +2,6 @@ import os
 import torch
 import torch.nn as nn
 from rwkvt.infctx_module import *
-from rwkvt.rwkvpeft.rwkvLinear import make_linear_ffn
 
 if os.environ["FUSED_KERNEL"] == '1':
     from rwkvfla.ops.rwkv7 import channel_mixing_rwkv7

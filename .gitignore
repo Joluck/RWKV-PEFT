@@ -6,3 +6,4 @@ fla/
 web/page/merge_page.py
 web/cache.yml
 *.Identifier
+.venv/
