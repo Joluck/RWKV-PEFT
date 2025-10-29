@@ -204,8 +204,16 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
         del self._index
 
     def __len__(self):
-        return len(self._index)
+        # 先判断 Index 里有没有被外部覆盖
+        if getattr(self._index, '_truncate_size', None) is not None:
+            return self._index._truncate_size
+        return len(self._index)          # 默认全长
 
+    def head(self, n):
+        """顺序截断到前 n 条，零拷贝"""
+        assert n <= len(self), "n larger than dataset"
+        self._index._truncate_size = n
+        return self
     # @lru_cache(maxsize=8)
     def __getitem__(self, idx):
         if isinstance(idx, int):
@@ -262,15 +270,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
             np_array = np.append(np_array, np_array0)
         return np_array.astype(int), min(size,length)
     
-    def only(self, idx, length=None):
-        ptr, size = self._index[idx]
-        if length<size:
-            size = length
-        np_array = np.frombuffer(
-                self._bin_buffer, dtype=self._index.dtype, count=size, offset=ptr
-            )
-    
-        return np_array
+
 
     @property
     def sizes(self):

@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from rwkvt.infctx_module import *
 
-from rwkvt.peft.rwkvLinear import make_linear_att
 from rwkvt.operator.rwkvop import RUN_CUDA_RWKV7g, RUN_RWKV7_STATE, RUN_RWKV7_INFCTX
 from torch.nn import functional as F
 
@@ -91,10 +90,9 @@ class RWKV_Tmix_x070(nn.Module):
 
             # D_MV_LORA = 32
             D_MV_LORA = max(32, int(round(  (1.3*(C**0.5))  /32)*32)) # suggestion
-            if self.layer_id!=0:
-                self.v1 = nn.Parameter(torch.zeros(C, D_MV_LORA))
-                self.v2 = nn.Parameter(ortho_init(torch.zeros(D_MV_LORA, C), 0.1))
-                self.v0 = nn.Parameter(torch.zeros(1,1,C)+1.0)
+            self.v1 = nn.Parameter(torch.zeros(C, D_MV_LORA))
+            self.v2 = nn.Parameter(ortho_init(torch.zeros(D_MV_LORA, C), 0.1))
+            self.v0 = nn.Parameter(torch.zeros(1,1,C)+1.0)
 
             # D_GATE_LORA = 128
             D_GATE_LORA = max(32, int(round(  (0.6*(C**0.8))  /32)*32)) # suggestion
@@ -109,10 +107,10 @@ class RWKV_Tmix_x070(nn.Module):
             self.r_k = nn.Parameter(torch.zeros(H,N))
 
             self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
-            self.receptance = make_linear_att(C, C, bias=False)
-            self.key = make_linear_att(C, C, bias=False)
-            self.value = make_linear_att(C, C, bias=False)
-            self.output = make_linear_att(C, C, bias=False)
+            self.receptance = nn.Linear(C, C, bias=False)
+            self.key = nn.Linear(C, C, bias=False)
+            self.value = nn.Linear(C, C, bias=False)
+            self.output = nn.Linear(C, C, bias=False)
             if os.environ["FUSED_KERNEL"] == '1':
                 self.ln_x = FusedGroupNorm(H, C, eps=(1e-5)*(args.head_size_divisor**2), bias=True) # !!! notice eps value !!!
             else:
@@ -137,7 +135,7 @@ class RWKV_Tmix_x070(nn.Module):
     def fused_addcmul(self, x, xx):
         return fused_addcmul_rwkv7(x, xx, self.x_r, self.x_w, self.x_k, self.x_v, self.x_a, self.x_g)
 
-    @torch.compile
+    #@torch.compile
     def forward(self, x, v_first, attention_mask=None):
         B, T, C = x.size()
         H = self.n_head
@@ -182,7 +180,7 @@ class RWKV_Tmix_x070_State(RWKV_Tmix_x070):
             self.time_state = nn.Parameter(torch.zeros(self.n_head, self.head_size, self.head_size))
 
 
-    @torch.compile
+    #@torch.compile
     def forward(self, x, v_first, attention_mask=None):
         B, T, C = x.size()
         H = self.n_head

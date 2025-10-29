@@ -2,7 +2,6 @@ import os
 import torch
 import torch.nn as nn
 from rwkvt.infctx_module import *
-from rwkvt.peft.rwkvLinear import make_linear_ffn
 
 if os.environ["FUSED_KERNEL"] == '1':
     from rwkvfla.ops.rwkv7 import channel_mixing_rwkv7
@@ -33,8 +32,8 @@ class RWKV_CMix_x070(nn.Module):
                 ddd[0, 0, i] = i / args.n_embd
             self.x_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0**4))
 
-        self.key = make_linear_ffn(args.n_embd, args.n_embd * 4, bias=False)
-        self.value = make_linear_ffn(args.n_embd * 4, args.n_embd, bias=False)
+        self.key = nn.Linear(args.n_embd, args.n_embd * 4, bias=False)
+        self.value = nn.Linear(args.n_embd * 4, args.n_embd, bias=False)
 
         # !!! initialize if you are using RWKV_Tmix_x070 in your code !!!
         # self.key.weight.data.uniform_(-0.5/(args.n_embd**0.5), 0.5/(args.n_embd**0.5))
@@ -55,7 +54,7 @@ class RWKV_CMix_x070_fla(RWKV_CMix_x070):
         super().__init__(args, layer_id)
         del self.time_shift
 
-    @torch.compile
+    #@torch.compile
     def forward(self, x, attention_mask=None):
         if attention_mask is not None:
             x = x.mul(attention_mask[:, -x.shape[-2]:, None])

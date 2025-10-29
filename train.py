@@ -15,7 +15,6 @@ if __name__ == "__main__":
     import lightning as pl
     import json
     from rwkvt.args_type import TrainingArgs
-    from rwkvt.dataset.dataset import get_data_by_l_version, get_vocab_size
     rank_zero_info("########## work in progress ##########")
 
     parser = ArgumentParser()
@@ -85,6 +84,12 @@ if __name__ == "__main__":
     #LORA
     parser.add_argument("--lora_config", default='{"lora_load":"", "lora_r":8, "lora_alpha":32, "lora_dropout":0.01}', type=json.loads)
 
+    parser.add_argument(
+        "--peft_config",
+        type=str,
+        default="{}",
+        help="PEFT config JSON string, e.g. '{\"r\":8, \"alpha\":32, \"dropout\":0.05, \"target_modules\":[\"receptance\",\"key\",\"value\",\"output\"]}'"
+    )
 
     # #LISA
     # parser.add_argument("--lisa_config", default='{"lisa_r":2, "lisa_k":100}', type=json.loads)
@@ -93,8 +98,8 @@ if __name__ == "__main__":
     parser.add_argument("--pissa_config", default='{"pissa_load":"", "pissa_init":"", "pissa_r":8, "svd_niter":4}', type=json.loads)
 
     #Bone
-    parser.add_argument("--disha_config", default='{"mode":"mode", "load":"", "r":64}', type=json.loads)
-
+    parser.add_argument("--miss_config", default='{"mode":"mode", "load":"", "r":64}', type=json.loads)
+    parser.add_argument("--merge", type=int, default=1, help="1=merge PEFT weights, 0=save PEFT-only")
 
     #quant
     parser.add_argument("--quant", default="none", type=str)
@@ -130,15 +135,16 @@ if __name__ == "__main__":
     parser.add_argument("--lr_schedule", default="cos", type=str)        #['cos', 'wsd']
 
 
-    if pl.__version__[0]=='2':
-        parser.add_argument("--accelerator", default="gpu", type=str)
-        parser.add_argument("--strategy", default="auto", type=str)
-        parser.add_argument("--devices", default=1, type=int)
-        parser.add_argument("--num_nodes", default=1, type=int)
-        parser.add_argument("--precision", default="fp16", type=str)
-        parser.add_argument("--accumulate_grad_batches", default=1, type=int)
-    else:
-        parser = Trainer.add_argparse_args(parser)
+    parser.add_argument("--accelerator", default="gpu", type=str)
+    parser.add_argument("--strategy", default="auto", type=str)
+    parser.add_argument("--devices", default=1, type=int)
+    parser.add_argument("--num_nodes", default=1, type=int)
+    parser.add_argument("--precision", default="fp16", type=str)
+    parser.add_argument("--accumulate_grad_batches", default=1, type=int)
+
+    parser.add_argument("--num_workers", default=8, type=int)
+    parser.add_argument("--persistent_workers", action="store_true")
+    parser.add_argument("--prefetch_factor", default=None, type=int)
     args = parser.parse_args()
 
     ########################################################################################################
@@ -179,11 +185,11 @@ if __name__ == "__main__":
     os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
     ######state tuning
-    os.environ["RWKV_TRAIN_TYPE"] = args.train_type
-    # if args.train_type=='state':
-    #     os.environ["RWKV_TRAIN_TYPE"]='state'
-    # elif args.train_type=='infctx':
-    #     os.environ["RWKV_TRAIN_TYPE"]='infctx'
+    if args.peft=='state':
+        os.environ["RWKV_TRAIN_TYPE"] = 'state'
+    else:
+        os.environ["RWKV_TRAIN_TYPE"] = args.train_type
+
 
     print(f"########## WKV OP           {args.op}               ##########\n" * 1)
     print(f"########## FUSED OP    {args.fused_kernel}          ##########\n" * 1)
@@ -244,23 +250,19 @@ if __name__ == "__main__":
     ########################################################################################################
 
     from rwkvt.lightning_train.trainer import train_callback
-    from rwkvt.peft.peft_loading import load_peft_model
-
+    from rwkvt.peft_loading import load_peft_model
+    from rwkvt.dataset.dataset import MyDataModule
     args, model = load_peft_model(args)
 
 
-    if pl.__version__[0]=='2':
-        trainer = Trainer(accelerator=args.accelerator,strategy=args.strategy,devices=args.devices,num_nodes=args.num_nodes,precision=args.precision,
-        logger=args.logger,callbacks=[train_callback(args)],max_epochs=args.max_epochs,check_val_every_n_epoch=args.check_val_every_n_epoch,num_sanity_val_steps=args.num_sanity_val_steps,
-        log_every_n_steps=args.log_every_n_steps,enable_checkpointing=args.enable_checkpointing,accumulate_grad_batches=args.accumulate_grad_batches,gradient_clip_val=args.gradient_clip_val)
-    else:
-        trainer = Trainer.from_argparse_args(
-            args,
-            callbacks=[train_callback(args)],
-        )
+
+    trainer = Trainer(accelerator=args.accelerator,strategy=args.strategy,devices=args.devices,num_nodes=args.num_nodes,precision=args.precision,
+    logger=args.logger,callbacks=[train_callback(args)],max_epochs=args.max_epochs,check_val_every_n_epoch=args.check_val_every_n_epoch,num_sanity_val_steps=args.num_sanity_val_steps,
+    log_every_n_steps=args.log_every_n_steps,enable_checkpointing=args.enable_checkpointing,accumulate_grad_batches=args.accumulate_grad_batches,gradient_clip_val=args.gradient_clip_val)
+
 
  
-    train_data = get_data_by_l_version(trainer=trainer, args=args)
+    train_data = MyDataModule(args)
 
     trainer.fit(model, train_data)
 

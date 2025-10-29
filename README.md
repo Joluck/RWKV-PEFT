@@ -8,47 +8,28 @@
 RWKV-PEFT is the official implementation for efficient parameter fine-tuning of RWKV models, supporting various advanced fine-tuning methods across multiple hardware platforms.
 
 # Recent updates
-## Support v7 & Code adjustment
- - 1.Removed `--fla` and added `--op cuda/fla/triton`. In RWKV7, you can choose from three different operators, with CUDA recommended by default. If you want to fine-tune using state tuning, please enable `--op fla` and set `--train_type state`.
- - 2.Renamed Bone to DiSHA(Note: The rank parameter in DiSHA is only half of that in LoRA. Under the same parameter setting, DiSHA(r) = 2 * LoRA(r)).:  
-``` disha_config='{"mode":"bone","load":"","r":64}' ```  
-You can still choose either `bone` or `bat` in the `mode` field.
-- 3.The model code is now clearer and easier to migrate. Check the `rwkvt` file for details.
-- 4.Removed the basic visualization training. A dedicated program will support visualization training in the future.
-- 5.Added lr_schedule, with cos_decay as the default. You can also use cosine annealing by setting --lr_schedule wsd.
-``` --my_testing "x070" ```
-## SFT
-Relevant parameters, detailed usage reference: scripts/run_sft.sh  
-- data_file 'meta-math/MetaMathQA' #You can directly choose the Hugging Face path, or you can choose your own JSON path.  
-- data_type sft #Select data type  
-- sft_field query response #Perform retrieval based on the question-and-answer format in the JSON.  
-- sft_split "train" #Set the number of data to load: "train" loads all the data, while "train[:1000]" loads only the first 1000 samples.  
-```
---data_type sft --sft_field query response --sft_split "train"
-```
-## Specific settings for SFT
-### RWKV-PEFT/src/rwkv_datasets/SFTdataset.py
-```
-tokenizer_path = 'RWKV/rwkv-5-world-3b' #Choose a tokenizer (select the official tokenizer)
-IGNORE_INDEX = -100 #Padding (do not modify)
-EOT_TOKEN = "\x17" #Set the stop token(s) you need
+## Support [huggingface/PEFT](https://github.com/huggingface/peft)
+You only need to check the usage examples of different methods in **PEFT**, then input the corresponding **name** and **config** correctly 
 
-# Modify the corresponding prompt according to your requirements
-PROMPT = (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Response:"
-    )
+`LoRA:`
 ```
-> [!TIP]
-> Downloading Hugging Face data may time out in China, so you need to add:   
->```HF_ENDPOINT="https://hf-mirror.com" sh scripts/run_sft.sh```
+--peft lora --peft_config '{"r":8,"lora_alpha":32,"lora_dropout":0.05}'
+```
+`MiSS:`
+```
+--peft miss --peft_config '{"r":8}'
+```
+> [!IMPORTANT]
+> state tuning 
+```
+--peft state --op fla
+```
 
-## DiSHA: Dimension-Sharding Adaptation of Large Language Models with Fast Convergence and Fast Computation [Paper](https://arxiv.org/pdf/2409.15371)
-The paper has been updated. DiSHA(Bone) is now a simple and efficient basic PEFT method that is faster and uses less VRAM than LoRA, converges faster, and performs better than PiSSA. 
-scripts:  
-DiSHA(Bone):``` disha_config='{"mode":"bone","load":"","r":64}' ``` 
-DiSHA(Bat):``` disha_config='{"mode":"bat","load":"","r":64}' ```
+
+## MiSS: Revisiting the Trade-off in LoRA with an Efficient Shard-Sharing Structure [Paper](https://arxiv.org/pdf/2409.15371)
+The method **Bone/DiSHA** has been officially renamed to **MiSS**.
+You can easily use it within **PEFT** (you’ll still see “Bone” for now, but it will be removed in future versions, so please use **MiSS** instead).
+
 
 
 # Installation
@@ -59,12 +40,8 @@ DiSHA(Bat):``` disha_config='{"mode":"bat","load":"","r":64}' ```
 ```bash
 git clone https://github.com/JL-er/RWKV-PEFT.git
 cd RWKV-PEFT
-pip install -r requirements.txt
+uv sync   or  pip install .
 ```
-
-## Web Run
-> [!TIP]
-> Coming Soon!
 
 ## Table of Contents
 - [Hardware Requirements](#hardware-requirements)
@@ -161,39 +138,29 @@ Note: Please refer to the RWKV official tutorial for detailed data preparation
 
 ## Detailed Configuration
 
-### 1. PEFT Method Selection
+###  PEFT Method Selection
 ```bash
---peft disha --disha_config $disha_config
+--peft lora --peft_config '{"r":8,"lora_alpha":32,"lora_dropout":0.05}'
 ```
+[state,lora,miss]
 
-### 2. Training Parts Selection
-```bash
---train_parts ["time", "ln"]
-```
-- Available parts: emb, head, time, ln
-- Default training: time, ln (small parameter ratio)
 
-### 3. Quantized Training
+
+###  Quantized Training
 ```bash
 --quant int8/nf4
 ```
 
-### 4. Infinite Length Training (infctx)
+### Infinite Length Training (infctx)
 ```bash
 --train_type infctx --chunk_ctx 512 --ctx_len 2048
 ```
 - ctx_len: Target training length
 - chunk_ctx: Slice length, must be smaller than ctx_len
 
-### 5. Data Loading Strategy
-```bash
---dataload pad
-```
-- get: Default random sampling (RWKV-LM style)
-- pad: Fixed-length padding sampling
-- only: Single data sampling (only supports bsz=1)
 
-### 6. DeepSpeed Strategy
+
+### DeepSpeed Strategy
 ```bash
 --strategy deepspeed_stage_1
 ```
@@ -203,7 +170,7 @@ Available strategies:
 - deepspeed_stage_2_offload
 - deepspeed_stage_3_offload
 
-### 7. FLA Operator
+###  FLA Operator
 By default, RWKV-PEFT uses custom CUDA kernels for wkv computation.
 However, you can use `--op fla` to enable the Triton kernel:
 ```
@@ -220,9 +187,9 @@ However, you can use `--op fla` to enable the Triton kernel:
 
 If you find this project helpful, please cite our work:
 ```bib
-@misc{kang2025dishadimensionshardingadaptationlarge,
-      title={DiSHA: Dimension-Sharding Adaptation of Large Language Models with Fast Convergence and Fast Computation}, 
-      author={Jiale Kang},
+@misc{kang2025missrevisitingtradeofflora,
+      title={MiSS: Revisiting the Trade-off in LoRA with an Efficient Shard-Sharing Structure}, 
+      author={Jiale Kang and Qingyu Yin},
       year={2025},
       eprint={2409.15371},
       archivePrefix={arXiv},

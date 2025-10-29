@@ -2,14 +2,10 @@
 # The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
-from torch.profiler import profile, record_function, ProfilerActivity
 
-import os, math, gc, importlib
-import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import deepspeed
-from rwkvt.infctx_module import BlockStateList
 from .block import Block
 
 class RWKV5(nn.Module):
