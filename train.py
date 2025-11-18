@@ -187,6 +187,8 @@ if __name__ == "__main__":
     ######state tuning
     if args.peft=='state':
         os.environ["RWKV_TRAIN_TYPE"] = 'state'
+        args.lr_init = 0.01
+        args.lr_final = 0
     else:
         os.environ["RWKV_TRAIN_TYPE"] = args.train_type
 
