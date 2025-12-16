@@ -182,8 +182,11 @@ class train_callback(pl.Callback):
             else:
                 if args.merge==1:
                     print("🚧 正在创建临时副本进行合并保存……")
-                    model_copy = copy.deepcopy(pl_module.model).to("cpu")  # 不占用显存
-
+                    #model_copy = copy.deepcopy(pl_module.model).to("cpu")  # 不占用显存
+                    origin_device = pl_module.device
+                    pl_module.model.to("cpu")
+                    model_copy = copy.deepcopy(pl_module.model)
+                    pl_module.model.to(origin_device)
                     model_copy.merge_and_unload()
                     to_save_dict = {k.replace("base_model.model.", ""): v for k, v in model_copy.state_dict().items()}
                     merged_path = f"{args.proj_dir}/rwkv-{args.epoch_begin + trainer.current_epoch}.pth"
