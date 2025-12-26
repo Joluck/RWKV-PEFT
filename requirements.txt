@@ -2,6 +2,7 @@ bitsandbytes
 deepspeed
 einops
 triton
+peft
 rwkv-fla
 rwkv
 transformers

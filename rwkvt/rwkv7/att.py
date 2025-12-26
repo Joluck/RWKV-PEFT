@@ -192,7 +192,10 @@ class RWKV_Tmix_x070_State(RWKV_Tmix_x070):
         xr, xw, xk, xv, xa, xg = self.addcmul_kernel(x, xx)
 
         r = self.receptance(xr)
-        w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5 # soft-clamp to (-inf, -0.5)
+        if os.environ["WKV"] == 'cuda':
+            w = self.w0 + torch.tanh(xw @ self.w1) @ self.w2
+        else:
+            w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5 # soft-clamp to (-inf, -0.5)
         k = self.key(xk)
         v = self.value(xv)
         if self.layer_id == 0:
