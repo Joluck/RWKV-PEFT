@@ -374,7 +374,7 @@ else:
             else:
                 raise NotImplementedError("Unsupported precision for RWKV7 state tuning")
         
-        if os.environ["RWKV_TRAIN_TYPE"] in ('lora', 'miss'):
+        elif os.environ["RWKV_TRAIN_TYPE"] in ('lora', 'miss'):
             if os.environ["RWKV_FLOAT_MODE"] == 'bf16':
                 flags = ['-res-usage', f'-D_N_={HEAD_SIZE}', f"-D_CHUNK_LEN_={CHUNK_LEN}", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization"]
                 load(name="rwkv7_clampw", sources=[f'cuda/rwkv7_clampw.cu', 'cuda/rwkv7_clampw.cpp'], is_python_module=False, verbose=True, extra_cuda_cflags=flags)
