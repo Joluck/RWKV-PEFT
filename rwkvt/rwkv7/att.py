@@ -147,7 +147,10 @@ class RWKV_Tmix_x070(nn.Module):
         xr, xw, xk, xv, xa, xg = self.addcmul_kernel(x, xx)
 
         r = self.receptance(xr)
-        w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5 # soft-clamp to (-inf, -0.5)
+        if os.environ["WKV"] == 'cuda':
+            w = self.w0 + torch.tanh(xw @ self.w1) @ self.w2
+        else:
+            w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5 # soft-clamp to (-inf, -0.5)
         k = self.key(xk)
         v = self.value(xv)
         if self.layer_id == 0:
@@ -241,7 +244,10 @@ class RWKV_Tmix_x070_infctx(RWKV_Tmix_x070):
         shift_state = x[:,-1,:]
 
         r = self.receptance(xr)
-        w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5 # soft-clamp to (-inf, -0.5)
+        if os.environ["WKV"] == 'cuda':
+            w = self.w0 + torch.tanh(xw @ self.w1) @ self.w2
+        else:
+            w = -F.softplus(-(self.w0 + torch.tanh(xw @ self.w1) @ self.w2)) - 0.5 # soft-clamp to (-inf, -0.5)
         k = self.key(xk)
         v = self.value(xv)
         if self.layer_id == 0:

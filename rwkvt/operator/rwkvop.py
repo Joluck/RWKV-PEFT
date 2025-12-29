@@ -373,6 +373,66 @@ else:
 
             else:
                 raise NotImplementedError("Unsupported precision for RWKV7 state tuning")
+        
+        if os.environ["RWKV_TRAIN_TYPE"] in ('lora', 'miss'):
+            if os.environ["RWKV_FLOAT_MODE"] == 'bf16':
+                flags = ['-res-usage', f'-D_N_={HEAD_SIZE}', f"-D_CHUNK_LEN_={CHUNK_LEN}", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization"]
+                load(name="rwkv7_clampw", sources=[f'cuda/rwkv7_clampw.cu', 'cuda/rwkv7_clampw.cpp'], is_python_module=False, verbose=True, extra_cuda_cflags=flags)
+                class RWKV7_CLAMPW_CUDA_OP(torch.autograd.Function):
+                    @staticmethod
+                    def forward(ctx,r,w,k,v,a,b):
+                        B,T,H,C = r.shape 
+                        assert T%CHUNK_LEN == 0
+                        assert all(i.dtype==torch.bfloat16 for i in [r,w,k,v,a,b])
+                        assert all(i.is_contiguous() for i in [r,w,k,v,a,b])
+                        y = torch.empty_like(v)
+                        s = torch.empty(B,H,T//CHUNK_LEN,C,C, dtype=torch.float32,device=w.device)
+                        sa = torch.empty(B,T,H,C, dtype=torch.float32,device=w.device)
+                        torch.ops.rwkv7_clampw.forward(r,w,k,v,a,b,y,s,sa)
+                        ctx.save_for_backward(r,w,k,v,a,b,s,sa)
+                        return y
+                    @staticmethod
+                    def backward(ctx,dy):
+                        assert all(i.dtype==torch.bfloat16 for i in [dy])
+                        assert all(i.is_contiguous() for i in [dy])
+                        r,w,k,v,a,b,s,sa = ctx.saved_tensors
+                        dr,dw,dk,dv,da,db = [torch.empty_like(x) for x in [r,w,k,v,a,b]]
+                        torch.ops.rwkv7_clampw.backward(r,w,k,v,a,b,dy,s,sa,dr,dw,dk,dv,da,db)
+                        return dr,dw,dk,dv,da,db
+                    
+                def RUN_CUDA_RWKV7g(r,w,k,v,a,b):
+                    B,T,HC = r.shape
+                    r,w,k,v,a,b = [i.view(B,T,HC//HEAD_SIZE,HEAD_SIZE) for i in [r,w,k,v,a,b]]
+                    return RWKV7_CLAMPW_CUDA_OP.apply(r,w,k,v,a,b).view(B,T,HC)
+            
+            if os.environ["RWKV_FLOAT_MODE"] == 'fp32':
+                flags = ['-res-usage', f'-D_N_={HEAD_SIZE}', "-D_FP32_", f"-D_CHUNK_LEN_={CHUNK_LEN}", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization"]
+                load(name="rwkv7_clampw", sources=[f'cuda/rwkv7_clampw.cu', 'cuda/rwkv7_clampw.cpp'], is_python_module=False, verbose=True, extra_cflags=["-D_FP32_"], extra_cuda_cflags=flags)
+                class RWKV7_CLAMPW_CUDA_OP(torch.autograd.Function):
+                    @staticmethod
+                    def forward(ctx,r,w,k,v,a,b):
+                        B,T,H,C = r.shape 
+                        assert T%CHUNK_LEN == 0
+                        assert all(i.dtype==torch.float32 for i in [r,w,k,v,a,b])
+                        assert all(i.is_contiguous() for i in [r,w,k,v,a,b])
+                        y = torch.empty_like(v)
+                        s = torch.empty(B,H,T//CHUNK_LEN,C,C, dtype=torch.float32,device=w.device)
+                        sa = torch.empty(B,T,H,C, dtype=torch.float32,device=w.device)
+                        torch.ops.rwkv7_clampw.forward(r,w,k,v,a,b,y,s,sa)
+                        ctx.save_for_backward(r,w,k,v,a,b,s,sa)
+                        return y
+                    @staticmethod
+                    def backward(ctx,dy):
+                        assert all(i.dtype==torch.float32 for i in [dy])
+                        assert all(i.is_contiguous() for i in [dy])
+                        r,w,k,v,a,b,s,sa = ctx.saved_tensors
+                        dr,dw,dk,dv,da,db = [torch.empty_like(x) for x in [r,w,k,v,a,b]]
+                        torch.ops.rwkv7_clampw.backward(r,w,k,v,a,b,dy,s,sa,dr,dw,dk,dv,da,db)
+                        return dr,dw,dk,dv,da,db
+                def RUN_CUDA_RWKV7g(r,w,k,v,a,b):
+                    B,T,HC = r.shape
+                    r,w,k,v,a,b = [i.view(B,T,HC//HEAD_SIZE,HEAD_SIZE) for i in [r,w,k,v,a,b]]
+                    return RWKV7_CLAMPW_CUDA_OP.apply(r,w,k,v,a,b).view(B,T,HC)
 
         else:
             flags = ['-res-usage', f'-D_C_={HEAD_SIZE}', f"-D_CHUNK_LEN_={CHUNK_LEN}", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization"]

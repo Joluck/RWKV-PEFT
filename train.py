@@ -185,8 +185,8 @@ if __name__ == "__main__":
     os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
     ######state tuning
-    if args.peft=='state':
-        os.environ["RWKV_TRAIN_TYPE"] = 'state'
+    if args.peft in ('state', 'lora', 'miss'):
+        os.environ["RWKV_TRAIN_TYPE"] = args.peft
     else:
         os.environ["RWKV_TRAIN_TYPE"] = args.train_type
 
