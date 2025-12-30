@@ -1,4 +1,7 @@
-from lib2to3.pgen2 import token
+try: 
+    from lib2to3.pgen2 import token
+except ImportError:
+    import token
 import os
 import torch
 import numpy as np
