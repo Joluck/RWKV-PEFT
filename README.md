@@ -146,11 +146,6 @@ Note: Please refer to the RWKV official tutorial for detailed data preparation
 
 
 
-###  Quantized Training
-```bash
---quant int8/nf4
-```
-
 ### Infinite Length Training (infctx)
 ```bash
 --train_type infctx --chunk_ctx 512 --ctx_len 2048
@@ -170,11 +165,11 @@ Available strategies:
 - deepspeed_stage_2_offload
 - deepspeed_stage_3_offload
 
-###  FLA Operator
+###  Operator
 By default, RWKV-PEFT uses custom CUDA kernels for wkv computation.
 However, you can use `--op fla` to enable the Triton kernel:
 ```
---op fla
+--op cuda/fla
 ```
 
 ## GPU Support
@@ -195,4 +190,5 @@ If you find this project helpful, please cite our work:
       archivePrefix={arXiv},
       primaryClass={cs.CL},
       url={https://arxiv.org/abs/2409.15371}, 
+
 }
