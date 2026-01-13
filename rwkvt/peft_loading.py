@@ -32,7 +32,7 @@ def load_peft_model(args: TrainingArgs):
     model = RWKVModel(args)
     state_dict = torch.load(args.load_model, map_location="cpu", weights_only=True, mmap=True)
     print(f"########## Loading {args.load_model}... ##########")
-    model.load_state_dict(state_dict, strict=(not True))
+    model.load_state_dict(state_dict, strict=(not True), assign=True)
     if os.environ["RWKV_TRAIN_TYPE"] == 'state':
         
         model = RWKV(args, model=model)
