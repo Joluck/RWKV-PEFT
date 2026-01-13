@@ -5,6 +5,7 @@ import json
 from rwkvt.lightning_train.light_rwkv import RWKV
 from rwkvt.args_type import TrainingArgs
 from rwkvt.lightning_train.trainer import generate_init_weight
+from accelerate import init_empty_weights
 
 from peft import get_peft_model, LoraConfig, BoneConfig, MissConfig, TaskType
 from peft import *
@@ -29,6 +30,8 @@ class RWKVConfig:
         return getattr(self, key, default)
 
 def load_peft_model(args: TrainingArgs):
+    with init_empty_weights():
+        model = RWKVModel(args)
     model = RWKVModel(args)
     state_dict = torch.load(args.load_model, map_location="cpu", weights_only=True, mmap=True)
     print(f"########## Loading {args.load_model}... ##########")
