@@ -30,6 +30,7 @@ class MyDataset(Dataset):
 
         if args.data_type == "sft":
             self.data = sft_dataset(args)
+
         elif args.data_type == "jsonl":
             with jsonlines.open(args.data_file) as file:
                 self.data = list(file)
@@ -44,6 +45,8 @@ class MyDataset(Dataset):
         print(f"Trimmed to {len(self.data)} samples for epoch_steps {args.epoch_steps}.")
     
     def __len__(self):
+        if self.args.data_type == "sft":
+            return self.data[0].size(0)
         return len(self.data)
 
     def __getitem__(self, idx):

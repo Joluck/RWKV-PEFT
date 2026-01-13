@@ -119,7 +119,7 @@ if __name__ == "__main__":
 
 
     #new optim
-    parser.add_argument("--optim", default="none", type=str)
+    parser.add_argument("--optimizer", default="none", type=str)
 
     #acc_grad_batchs
     parser.add_argument("--avg_loss", default=0, type=int)
