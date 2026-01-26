@@ -173,7 +173,13 @@ class RWKV(pl.LightningModule):
     if os.environ.get("RWKV_TRAIN_TYPE") == 'infctx':
         def forward(self, idx,  last_shift_states: torch.Tensor,
                 last_wkv_states: torch.Tensor, attention_mask=None):
-            return self.model(idx, last_shift_states, last_wkv_states, attention_mask)
+            return self.model(
+                input_ids=idx,
+                attention_mask=attention_mask,
+                last_shift_states=last_shift_states,
+                last_wkv_states=last_wkv_states,
+            )
+
     else:
         def forward(self, idx, attention_mask=None):
             return self.model(idx, attention_mask)
