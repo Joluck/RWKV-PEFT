@@ -1,9 +1,9 @@
-load_model="/home/rwkv/model/rwkv7-g1-1.5b-20250429-ctx4096.pth"
+load_model="/home/rwkv/jl/models/rwkv7-g1k-13.3b-20260930-ctx25600.pth"
 proj_dir='/home/rwkv/JL/out_model/test'
-data_file=/home/rwkv/JL/data/roleplay
+data_file=meta-math/MetaMathQA
 
-n_layer=24
-n_embd=2048
+n_layer=61
+n_embd=4096
 
 micro_bsz=8
 epoch_save=1
@@ -14,7 +14,7 @@ peft_config='{"r":8,"lora_alpha":32,"lora_dropout":0.05}'
 python train.py --load_model $load_model \
 --proj_dir $proj_dir --data_file $data_file \
 --vocab_size 65536 \
---data_type binidx \
+--data_type sft --sft_field query response --sft_split "train" \
 --n_layer $n_layer --n_embd $n_embd \
 --ctx_len $ctx_len --micro_bsz $micro_bsz \
 --epoch_steps $epoch_steps --epoch_count 10 --epoch_save $epoch_save \

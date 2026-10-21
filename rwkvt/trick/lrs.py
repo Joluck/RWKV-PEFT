@@ -1,5 +1,6 @@
 import math
 
+
 def cos_decay(initial_lr, final_lr, current_step, total_steps):
     """
     Compute the cosine decayed learning rate with a final learning rate.
@@ -48,10 +49,10 @@ def wsd(initial_lr, final_lr, current_step, total_steps, warmup_steps=100):
         # Adjust step count for cosine annealing phase.
         effective_step = current_step - warmup_steps
         effective_total = total_steps - warmup_steps
-        
+
         if effective_step >= effective_total:
             return final_lr
-        
+
         # Compute cosine annealing decay.
         cosine_decay = 0.5 * (1 + math.cos(math.pi * effective_step / effective_total))
         decayed_lr = final_lr + (initial_lr - final_lr) * cosine_decay

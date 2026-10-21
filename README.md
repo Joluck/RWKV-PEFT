@@ -120,18 +120,21 @@ pip install -r requirements.txt
 
 2. Run example script:
 ```bash
-sh scripts/run_lora.sh
+bash scripts/lora.sh
 ```
+Always pass `--my_testing` (`x050`/`x060`/`x070`) and prefer `--precision bf16`;
+`fp16` is rejected by the bundled CUDA kernels.
 Note: Please refer to the RWKV official tutorial for detailed data preparation
 
 
 ## Main Features
 
-- **Multiple Fine-tuning Methods**: Supports LoRA, PISSA, Bone, State Tuning, etc.
-- **Quantized Training**: Supports INT8/NF4 quantization for significant VRAM reduction
-- **Flexible Data Loading**: Supports various data sampling strategies 
-- **Memory Optimization**: Multiple DeepSpeed strategies available
-- **Loss Masking**: Supports loss masking for QA dialogue and padding
+- **Multiple Fine-tuning Methods**: LoRA / PiSSA / MiSS / state tuning through huggingface/PEFT
+- **Flexible Data Loading**: binidx (mmap, `pad`/`only` sampling), jsonl and SFT datasets
+- **Memory Optimization**: DeepSpeed ZeRO strategies, gradient checkpointing, meta-device weight loading
+- **Loss Masking**: prompt tokens are masked out automatically for SFT
+- **FSDP2**: `--strategy fsdp2` shards the frozen base weights across GPUs
+  (`fully_shard`), with aggregated checkpoint saving; see [docs/fsdp2评估.md](docs/fsdp2评估.md)
 - **Infinite Context Training**: Supports infctx training mode, utilizing RWKV's constant memory usage advantage to train with "infinite" context under limited resources
 - **Multi-Hardware Support**: RWKV-PEFT officially supports NVIDIA, AMD, Moore Threads, Musa, Iluvatar CoreX, and other hardware platforms. Ascend NPU implementation will be available later. Note: Currently we only support issues for NVIDIA hardware
 - **RWKV-FLA Efficient Training**: rwkv-fla is a Triton-based linear attention operator that can run efficiently on hardware without CUDA support
@@ -165,12 +168,38 @@ Available strategies:
 - deepspeed_stage_2_offload
 - deepspeed_stage_3_offload
 
+### FSDP2 (recommended when the base weights do not fit per GPU)
+
+```bash
+--strategy fsdp2 --devices 8 --merge 0
+```
+
+- shards every transformer block (frozen base included) with `torch.distributed.fsdp.fully_shard`
+- checkpoints are gathered to a single file on rank 0; `--merge 0` saves the adapter only
+- requires `torch>=2.4` and `lightning>=2.5`, `--precision bf16`
+  ```bash
+  bash scripts/run_lora_13b_fsdp2.sh      # 13.3B + LoRA + MetaMathQA SFT
+  ```
+- details and limitations: [docs/fsdp2评估.md](docs/fsdp2评估.md)
+
 ###  Operator
 By default, RWKV-PEFT uses custom CUDA kernels for wkv computation.
 However, you can use `--op fla` to enable the Triton kernel:
 ```
 --op cuda/fla
 ```
+
+## Development
+
+```bash
+pip install -e ".[dev]"     # ruff + pytest
+ruff check .                # lint (config in pyproject.toml)
+pytest -q                   # CPU smoke tests, no GPU required
+pre-commit install          # optional: run ruff on commit
+```
+
+- [docs/整改计划.md](docs/整改计划.md)：代码结构审查、问题清单、分阶段整改路线图、代码规范
+- [docs/fsdp2评估.md](docs/fsdp2评估.md)：FSDP2 实现说明、已验证范围与限制
 
 ## GPU Support
 

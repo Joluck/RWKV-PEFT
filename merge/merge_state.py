@@ -1,36 +1,30 @@
-from collections import OrderedDict
-import os
-import sys
-from typing import Dict
-import typing
-import torch
-import bitsandbytes as bnb
+"""Merge a state-tuning checkpoint into the base model weights."""
+
 from argparse import ArgumentParser
 
-parser = ArgumentParser()
-parser.add_argument("--base_model", default="", type=str)
-parser.add_argument("--state_checkpoint", default="", type=str)
-parser.add_argument("--output", default="", type=str)
-# parser.add_argument("--quant", default="none", type=str)
-parser.add_argument("--device", default="cuda", type=str)
-# parser.add_argument("--lora_alpha", default=16, type=int)
-args = parser.parse_args()
-device= args.device
-base_model = args.base_model
-state= args.state_checkpoint
-output= args.output
+import torch
 
 
-with torch.no_grad():
-    w: Dict[str, torch.Tensor] = torch.load(base_model, map_location='cpu')
-    # merge LoRA-only slim checkpoint into the main weights
-    w_state: Dict[str, torch.Tensor] = torch.load(state, map_location='cpu')
+def main() -> None:
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument("--base_model", required=True, help="base .pth checkpoint")
+    parser.add_argument("--state_checkpoint", required=True,
+                        help="checkpoint produced by --peft state")
+    parser.add_argument("--output", required=True, help="path of the merged .pth")
+    args = parser.parse_args()
 
-    for k in w_state.keys():
-        print(k)
-        w[k] = w_state[k]
-    # merge LoRA weights
-    for k in w.keys():
-        print(k)
-    
-    torch.save(w, output)
+    with torch.no_grad():
+        weights = torch.load(args.base_model, map_location="cpu")
+        state = torch.load(args.state_checkpoint, map_location="cpu")
+
+        missing = [k for k in state if k not in weights]
+        if missing:
+            raise KeyError(f"{len(missing)} state key(s) not present in the base "
+                           f"model, e.g. {missing[:5]}")
+        weights.update(state)
+        torch.save(weights, args.output)
+    print(f"merged {len(state)} tensors -> {args.output}")
+
+
+if __name__ == "__main__":
+    main()

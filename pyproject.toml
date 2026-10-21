@@ -1,21 +1,69 @@
 [project]
 name = "rwkv-peft"
 version = "0.1.0"
-description = "Add your description here"
+description = "Parameter-efficient fine-tuning for RWKV models"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "bitsandbytes>=0.48.1",
     "datasets>=4.3.0",
     "deepspeed>=0.18.1",
     "einops>=0.8.1",
     "jsonlines>=4.0.0",
-    "lightning>=2.0.0",
+    "lightning>=2.5.0",
     "peft>=0.17.1",
     "rwkv>=0.8.30",
     "rwkv-fla>=0.7.202508221413",
-    "torch>=2.9.0",
+    "torch>=2.4.0",
     "transformers>=4.57.1",
     "triton>=3.5.0",
     "wandb>=0.22.3",
 ]
+
+[project.optional-dependencies]
+# optional: only needed for --peft state / --op cuda on the matching hardware
+quant = ["bitsandbytes>=0.48.1"]
+dev = ["pytest>=8.0", "ruff>=0.15"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rwkvt*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["."]
+extend-exclude = ["json2binidx_tool"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "RUF",  # ruff specific
+]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # ambiguous unicode (Chinese comments/docstrings)
+    "B008",                        # function call in default argument
+    "RUF059",                      # unused unpacked variable (idx shapes)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# shims that must keep import-time side effects / conditional definitions
+"rwkvt/operator/rwkvop.py" = ["F811", "E501"]      # kernel launch flags
+"rwkvt/operator/triton_rwkv7.py" = ["F811", "E501"]
+"rwkvt/dataset/binidx.py" = ["B019"]  # bounded lru_cache on purpose
+
+[tool.ruff.lint.isort]
+known-first-party = ["rwkvt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

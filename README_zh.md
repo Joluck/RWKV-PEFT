@@ -180,24 +180,15 @@ sh scripts/run_lora.sh
 
 ### 1. PEFT 方法选择
 
-```bash
---peft disha --disha_config $disha_config
-```
-
-### 2. 训练部分选择
+PEFT 方法统一通过 huggingface/PEFT 的 `--peft` + `--peft_config` 指定：
 
 ```bash
---train_parts ["time", "ln"]
-```
-- 可选部分：emb、head、time、ln
-- 默认训练：time、ln（参数量占比小）
-
-### 3. 量化训练
-```bash
---quant int8/nf4
+--peft lora --peft_config '{"r":8,"lora_alpha":32,"lora_dropout":0.05}'
+--peft miss --peft_config '{"r":8}'
+--peft state --op fla          # state tuning，只训练 *_state 参数
 ```
 
-### 4. 无限长度训练（infctx）
+### 2. 无限长度训练（infctx）
 
 ```bash
 --train_type infctx --chunk_ctx 512 --ctx_len 2048
@@ -205,16 +196,15 @@ sh scripts/run_lora.sh
 - ctx_len：目标训练长度
 - chunk_ctx：切片长度，需小于ctx_len
 
-### 5. 数据加载策略
+### 3. 数据加载策略
 
 ```bash
 --dataload pad
 ```
-- get：默认随机采样（RWKV-LM方式）
-- pad：固定长度填充采样
-- only：单条数据采样（仅支持bsz=1）
+- pad：不足 `ctx_len` 时回绕到数据集开头补齐（默认）
+- only：不足 `ctx_len` 时直接截断
 
-### 6. DeepSpeed 策略
+### 4. DeepSpeed 策略
 
 ```bash
 --strategy deepspeed_stage_1
@@ -225,7 +215,19 @@ sh scripts/run_lora.sh
 - deepspeed_stage_2_offload
 - deepspeed_stage_3_offload
 
-### 7. FLA 算子
+### 5. FSDP2（base 权重单卡放不下时推荐）
+
+```bash
+--strategy fsdp2 --devices 8 --merge 0
+```
+
+- 用 `torch.distributed.fsdp.fully_shard` 按 `Block` 切分（冻结的 base 也会被切开，这是 LoRA 场景下 ZeRO-1/2 做不到的）
+- 保存时自动聚合成单文件；`--merge 0` 只存 adapter，省内存
+- 需要 `torch>=2.4`、`lightning>=2.5`，精度用 `bf16`
+- 13B 示例：`bash scripts/run_lora_13b_fsdp2.sh`（`DEVICES=4` 可改卡数，`DRY_RUN=1` 只打印命令）
+- 实现细节与限制：[docs/fsdp2评估.md](docs/fsdp2评估.md)
+
+### 5. FLA 算子
 
 默认情况下， RWKV-PEFT 会使用自定义的 cuda 内核来实现 wkv 计算。 但您也可以使用`--op fla`来开启 Triton 内核。
 
@@ -234,6 +236,18 @@ rwkv-fla 是基于 triton 的线性注意力算子，可以在不支持 cuda 的
 ```
 --op fla
 ```
+
+## 开发与测试
+
+```bash
+pip install -e ".[dev]"     # ruff + pytest
+ruff check .                # 代码规范检查（配置见 pyproject.toml）
+pytest -q                   # CPU 冒烟测试，无需 GPU
+pre-commit install          # 可选：提交前自动跑 ruff
+```
+
+- [docs/整改计划.md](docs/整改计划.md)：结构审查、问题清单、整改路线图、代码规范
+- [docs/fsdp2评估.md](docs/fsdp2评估.md)：FSDP2 实现说明、已验证范围与限制
 
 ## GPU 支持情况
 

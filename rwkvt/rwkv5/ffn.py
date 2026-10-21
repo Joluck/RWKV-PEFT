@@ -1,8 +1,8 @@
+"""RWKV-5 channel-mixing (FFN) layer."""
 
-import os, math, gc, importlib
 import torch
 import torch.nn as nn
-from rwkvt.infctx_module import *
+
 
 def RWKV_Cmix_v5(*args, **kwargs):
     return RWKV_ChannelMix(*args, **kwargs)
@@ -21,7 +21,7 @@ class RWKV_ChannelMix(nn.Module):
                 ddd[0, 0, i] = i / args.n_embd
             self.time_mix_k = nn.Parameter(torch.pow(ddd, ratio_1_to_almost0))
             self.time_mix_r = nn.Parameter(torch.pow(ddd, ratio_1_to_almost0))
-        
+
         self.key = nn.Linear(args.n_embd, args.dim_ffn, bias=False)
         self.receptance = nn.Linear(args.n_embd, args.n_embd, bias=False)
         self.value = nn.Linear(args.dim_ffn, args.n_embd, bias=False)

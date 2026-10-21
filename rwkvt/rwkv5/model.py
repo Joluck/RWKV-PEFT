@@ -1,14 +1,16 @@
 ########################################################################################################
 # The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
-from torch.utils.checkpoint import checkpoint as torch_checkpoint
-
 import torch.nn as nn
-from torch.nn import functional as F
-import deepspeed
+
+from rwkvt.hf_compat import HFCompatibleModel
+from rwkvt.operator.checkpoint import checkpoint_block
+from rwkvt.utils import drop_unsupported_kwargs
+
 from .block import Block
 
-class RWKV5(nn.Module):
+
+class RWKV5(HFCompatibleModel, nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
@@ -20,23 +22,17 @@ class RWKV5(nn.Module):
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, input_ids, attention_mask=None, **kwargs):
+        # RWKV-5 has no masked time-mix; the argument keeps the caller interface
+        # uniform with RWKV-6/7 (see light_rwkv.RWKV.forward).
+        drop_unsupported_kwargs("RWKV5", kwargs)
         args = self.args
-        B, T = idx.size()
-        assert T <= args.ctx_len, "Cannot forward, model ctx_len is exhausted."
+        B, T = input_ids.size()
+        assert args.ctx_len >= T, "Cannot forward, model ctx_len is exhausted."
 
-        x = self.emb(idx)
+        x = self.emb(input_ids)
 
         for block in self.blocks:
-            if args.grad_cp == 1:
-                if args.train_type == 'state' or args.peft !='none':
-                    x = torch_checkpoint(block, x, use_reentrant=False)
-                else:
-                    x = deepspeed.checkpointing.checkpoint(block, x)
-            else:
-                x = block(x)
+            x = checkpoint_block(args, block, x) if args.grad_cp == 1 else block(x)
 
-        x = self.ln_out(x)
-        x = self.head(x)
-
-        return x
+        return self.head(self.ln_out(x))

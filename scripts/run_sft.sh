@@ -10,7 +10,7 @@ epoch_save=1
 epoch_steps=6171 #6171
 ctx_len=512
 
-bone_config='{"bone_mode":"bone","bone_load":"","bone_r":64}'
+peft_config='{"r":64}'
 
 
 python train.py --load_model $load_model \
@@ -22,5 +22,5 @@ python train.py --load_model $load_model \
 --lr_init 2e-5 --lr_final 2e-5 --warmup_steps 0 --beta1 0.9 --beta2 0.99 --adam_eps 1e-8 \
 --accelerator gpu --devices 1 --precision bf16 --strategy deepspeed_stage_1 --grad_cp 1 \
 --my_testing "x070" \
---peft bone --bone_config $bone_config \
+--peft miss --peft_config $peft_config \
 --data_type sft --sft_field query response --sft_split "train" --wandb DiSHA

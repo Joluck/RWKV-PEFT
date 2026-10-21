@@ -1,128 +1,126 @@
+"""Supervised fine-tuning dataset helpers (hf ``datasets`` based)."""
 
-import copy
-from typing import Optional, Dict, Sequence, List, Literal
-import logging
-import torch.nn.functional as F
+from collections.abc import Mapping, Sequence
 
+import numpy as np
 import torch
-import torch.distributed
 import transformers
 from datasets import load_dataset
-import numpy as np
-from dataclasses import dataclass, field
-# from transformers import AutoTokenizer, Rwkv6Config, Rwkv6Model, Rwkv6Tokenizer
 
-#tokenizer = Rwkv6Tokenizer.from_pretrained("RWKV/v6-Finch-1B6-HF")
-
-tokenizer_path = 'RWKV/rwkv-5-world-3b'
 IGNORE_INDEX = -100
 EOT_TOKEN = "\x17"
+DEFAULT_TOKENIZER = "RWKV/rwkv-5-world-3b"
 
 PROMPT = (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Response:"
-    )
+    "Below is an instruction that describes a task. "
+    "Write a response that appropriately completes the request.\n\n"
+    "### Instruction:\n{instruction}\n\n### Response:"
+)
 
 
-
-def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer) -> Dict:
+def _tokenize_fn(strings: Sequence[str], tokenizer) -> dict:
     """Tokenize a list of strings."""
-    tokenized_list = [tokenizer(text, max_length=tokenizer.model_max_length,truncation=True,)for text in strings]
-    input_ids = labels = [np.array(tokenized.input_ids) for tokenized in tokenized_list]
-    input_ids_lens = labels_lens = [len(tokenized.input_ids) for tokenized in tokenized_list]
+    tokenized_list = [tokenizer(text, max_length=tokenizer.model_max_length,
+                                truncation=True) for text in strings]
+    ids = [np.array(t.input_ids) for t in tokenized_list]
+    return {"input_ids": ids, "labels": ids,
+            "input_ids_lens": [len(i) for i in ids],
+            "labels_lens": [len(i) for i in ids]}
 
-    return dict(
-        input_ids=input_ids,
-        labels=labels,
-        input_ids_lens=input_ids_lens,
-        labels_lens=labels_lens,
-    )
 
-def preprocess(
-    sources: Sequence[str],
-    targets: Sequence[str],
-    tokenizer: transformers.PreTrainedTokenizer,
-) -> Dict:
-    """Preprocess the data by tokenizing."""
-    examples = [s + t for s, t in zip(sources, targets)]
-    examples_tokenized, sources_tokenized = [_tokenize_fn(strings, tokenizer) for strings in (examples, sources)]
+def preprocess(sources: Sequence[str], targets: Sequence[str], tokenizer) -> dict:
+    """Tokenize prompt+answer and mask the prompt tokens out of the loss."""
+    examples = [s + t for s, t in zip(sources, targets, strict=True)]
+    examples_tokenized, sources_tokenized = [
+        _tokenize_fn(strings, tokenizer) for strings in (examples, sources)]
     input_ids = examples_tokenized["input_ids"]
-    labels = copy.deepcopy(input_ids)
-    for label, source_len in zip(labels, sources_tokenized["input_ids_lens"]):
+    labels = [ids.copy() for ids in input_ids]
+    for label, source_len in zip(labels, sources_tokenized["input_ids_lens"],
+                                strict=True):
         label[:source_len] = IGNORE_INDEX
-    return dict(input_ids=input_ids, labels=labels)
+    return {"input_ids": input_ids, "labels": labels}
+
 
 def train_tokenize_function(examples, tokenizer, query, response):
-    sources = [PROMPT.format_map(dict(instruction=instruction)) for instruction in examples[query]]
+    sources = [PROMPT.format_map({"instruction": instruction})
+               for instruction in examples[query]]
     targets = [f"{output}\n{EOT_TOKEN}" for output in examples[response]]
-    data_dict = preprocess(sources, targets, tokenizer)
-    return data_dict
+    return preprocess(sources, targets, tokenizer)
 
-def sft_dataset(script_args):
 
+def get_tokenizer(args):
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        tokenizer_path,
-        model_max_length=script_args.ctx_len,
+        args.tokenizer_path,
+        model_max_length=args.ctx_len,
         padding_side="right",
         use_fast=True,
-        trust_remote_code=True
+        trust_remote_code=True,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    # logger.info("PAD Token:", tokenizer.pad_token, tokenizer.pad_token_id)
-    # logger.info("BOS Token", tokenizer.bos_token, tokenizer.bos_token_id)
-    # logger.info("EOS Token", tokenizer.eos_token, tokenizer.eos_token_id)
+    return tokenizer
 
-    raw_train_datasets = load_dataset(script_args.data_file, split=script_args.sft_split)
 
-    # if script_args.local_rank > 0: 
-    #     torch.distributed.barrier()
-        
-    train_dataset = raw_train_datasets.map(
+def sft_dataset(args):
+    """Tokenize the configured hf dataset; returns the raw (unpadded) dataset.
+
+    Padding happens per batch in :func:`pad_collate`, so the full dataset never
+    has to be materialised as padded tensors.
+    """
+    tokenizer = get_tokenizer(args)
+    raw = load_dataset(args.data_file, split=args.sft_split)
+    # ``--epoch_steps`` means "samples per mini-epoch" for every data type, so
+    # trim *before* tokenizing: a 200k-row subset tokenizes much faster than the
+    # full MetaMathQA and keeps the epoch length predictable.
+    epoch_steps = getattr(args, "epoch_steps", 0)
+    if epoch_steps and len(raw) > epoch_steps:
+        raw = raw.select(range(epoch_steps))
+    dataset = raw.map(
         train_tokenize_function,
         batched=True,
         batch_size=3000,
-        num_proc=32,
-        remove_columns=raw_train_datasets.column_names,
+        num_proc=args.sft_num_proc,
+        remove_columns=raw.column_names,
         load_from_cache_file=True,
         desc="Running tokenizer on train dataset",
-        fn_kwargs={"tokenizer": tokenizer, "query": script_args.sft_field[0], "response": script_args.sft_field[1]}
+        fn_kwargs={"tokenizer": tokenizer,
+                   "query": args.sft_field[0],
+                   "response": args.sft_field[1]},
     )
-    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-    data_module = data_collator(train_dataset)
-
-    return (data_module["input_ids"], data_module["labels"], data_module["attention_mask"])
+    return dataset, tokenizer
 
 
-@dataclass
-class DataCollatorForSupervisedDataset(object):
-    """Collate examples for supervised fine-tuning."""
-    tokenizer: transformers.PreTrainedTokenizer
+class PadCollator:
+    """Pad a batch of variable length samples.
 
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
-        input_ids = [torch.tensor(x) for x in input_ids]
+    Items are accepted either as ``(input_ids, labels)`` tuples (what
+    :class:`rwkvt.dataset.dataset.MyDataset` returns) or as mappings with
+    ``input_ids``/``labels`` keys.
+
+    The attention mask is built from the original lengths instead of
+    ``input_ids != pad_token_id``: the RWKV tokenizer uses ``eos`` (=0) as pad,
+    and that id also occurs inside real sequences.
+    """
+
+    def __init__(self, tokenizer):
+        self.pad_token_id = tokenizer.pad_token_id
+
+    @staticmethod
+    def _split(instance):
+        if isinstance(instance, Mapping):
+            return instance["input_ids"], instance["labels"]
+        input_ids, labels = instance
+        return input_ids, labels
+
+    def __call__(self, instances: Sequence):
+        pairs = [self._split(x) for x in instances]
+        lengths = torch.tensor([len(ids) for ids, _ in pairs], dtype=torch.long)
         input_ids = torch.nn.utils.rnn.pad_sequence(
-            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
-        )
-        labels = [torch.tensor(x) for x in labels]
-        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
-        
-        return dict(
-            input_ids=input_ids,
-            labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
-        )
-# class Data():
-#     model_name_or_path: str = "RWKV/rwkv-5-world-3b"
-#     data_file :str = "/home/rwkv/JL/data/MetaMathQA"
-#     sft_split: str = "train[:5000]"#field(default="train[:100000]", metadata={"help": "(`['train', 'test', 'eval']`):"})
-#     sft_field: List[str] = ["query", "response"]#field(default=["query", "response"], metadata={"help": "Fields of dataset input and output."})
-#     ctx_len: int = 100
-
-
-# if __name__ == "__main__":
-#     args = Data()
-#     sft_dataset(args)
-
+            [torch.as_tensor(ids, dtype=torch.long) for ids, _ in pairs],
+            batch_first=True, padding_value=self.pad_token_id)
+        labels = torch.nn.utils.rnn.pad_sequence(
+            [torch.as_tensor(labels, dtype=torch.long) for _, labels in pairs],
+            batch_first=True, padding_value=IGNORE_INDEX)
+        positions = torch.arange(input_ids.size(1)).unsqueeze(0)
+        attention_mask = positions < lengths.unsqueeze(1)
+        return input_ids, labels, attention_mask
