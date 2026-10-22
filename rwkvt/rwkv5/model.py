@@ -22,7 +22,8 @@ class RWKV5(HFCompatibleModel, nn.Module):
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
 
-    def forward(self, input_ids, attention_mask=None, **kwargs):
+    def forward(self, input_ids, attention_mask=None, return_hidden=False,
+                **kwargs):
         # RWKV-5 has no masked time-mix; the argument keeps the caller interface
         # uniform with RWKV-6/7 (see light_rwkv.RWKV.forward).
         drop_unsupported_kwargs("RWKV5", kwargs)
@@ -31,8 +32,11 @@ class RWKV5(HFCompatibleModel, nn.Module):
         assert args.ctx_len >= T, "Cannot forward, model ctx_len is exhausted."
 
         x = self.emb(input_ids)
+        token_embeds = x
 
         for block in self.blocks:
             x = checkpoint_block(args, block, x) if args.grad_cp == 1 else block(x)
 
-        return self.head(self.ln_out(x))
+        x = self.ln_out(x)
+        logits = self.head(x)
+        return (logits, x, token_embeds) if return_hidden else logits

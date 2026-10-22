@@ -215,7 +215,27 @@ PEFT 方法统一通过 huggingface/PEFT 的 `--peft` + `--peft_config` 指定�
 - deepspeed_stage_2_offload
 - deepspeed_stage_3_offload
 
-### 5. FSDP2（base 权重单卡放不下时推荐）
+### 5. 多 token 预测（MTP，冻结底座）
+
+```bash
+--peft mtp --mtp_depth 1 --mtp_loss_weight 0.3
+```
+
+- 底座（embedding / blocks / lm head）全部冻结，**只训练 MTP 头**
+- 第 k 层把「上一步的 hidden」和「第 i+k 个 token 的 embedding」融合，过一个 channel-mix 块，
+  复用冻结的 lm head 预测第 i+k+1 个 token（DeepSeek-V3 的做法，改为 RWKV 风格）
+- 损失 = `mtp_loss_weight * mean_k(CE_k) + mtp_main_weight * CE(下一个 token)`；
+  `mtp_main_weight=0` 时这个权重只是全局缩放（Adam 近似尺度无关）；
+  `--mtp_main_weight` 默认 0（底座冻结学不动），两项都会写进 `loss_data.jsonl`
+  的 `main_loss` / `mtp_loss` 字段，方便单独看 MTP 收敛
+- 只保存 MTP 头：`rwkv-N-mtp.pth`；用 `--mtp_load` 续训/加载
+- MTP 头只用于训练，推理时直接丢掉，底座不受影响
+- draft/verify 解码器与接受率统计：`rwkvt/spec_decode.py`；
+  设计与 vLLM 对照见 [docs/mtp.md](docs/mtp.md)
+- 13B 现成脚本：`bash scripts/mtp.sh`（`DRY_RUN=1` 只打印命令；wandb 默认开启，
+  `WANDB=` 关闭，`WANDB_MODE=offline` 只写本地）
+
+### 6. FSDP2（base 权重单卡放不下时推荐）
 
 ```bash
 --strategy fsdp2 --devices 8 --merge 0
@@ -223,8 +243,10 @@ PEFT 方法统一通过 huggingface/PEFT 的 `--peft` + `--peft_config` 指定�
 
 - 用 `torch.distributed.fsdp.fully_shard` 按 `Block` 切分（冻结的 base 也会被切开，这是 LoRA 场景下 ZeRO-1/2 做不到的）
 - 保存时自动聚合成单文件；`--merge 0` 只存 adapter，省内存
-- 需要 `torch>=2.4`、`lightning>=2.5`，精度用 `bf16`
-- 13B 示例：`bash scripts/run_lora_13b_fsdp2.sh`（`DEVICES=4` 可改卡数，`DRY_RUN=1` 只打印命令）
+- 需要 `torch>=2.4`、`lightning>=2.5`；FSDP2 会自动切到 `--precision bf16-true`
+  （单纯 `bf16` 只是 autocast，fp32 checkpoint 仍是 fp32，WKV kernel 会拒绝）
+- 13B LoRA：`bash scripts/run_13b_fsdp2.sh`；13B MTP：`bash scripts/mtp.sh`
+  （`DEVICES=4` 改卡数，`DRY_RUN=1` 只打印命令）
 - 实现细节与限制：[docs/fsdp2评估.md](docs/fsdp2评估.md)
 
 ### 5. FLA 算子
@@ -236,6 +258,13 @@ rwkv-fla 是基于 triton 的线性注意力算子，可以在不支持 cuda 的
 ```
 --op fla
 ```
+
+### 常见报错
+
+| 现象 | 原因 / 处理 |
+| --- | --- |
+| `Fatal glibc error: pthread_mutex_lock ... __owner == 0` | 在 CUDA/NCCL 已启动后 fork DataLoader/分词 worker。用 `NUM_WORKERS=0`（13B 脚本默认）或 `NUM_WORKERS=8 WORKER_START_METHOD=spawn PERSISTENT_WORKERS=1` |
+| `rwkvop.py` 里的 bf16 断言 | checkpoint 是 fp32，而 `--precision bf16` 只是 autocast；用 `--precision bf16-true`（FSDP2 下自动切换） |
 
 ## 开发与测试
 

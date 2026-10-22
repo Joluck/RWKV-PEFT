@@ -98,7 +98,8 @@ def _move_unsharded(root: torch.nn.Module, device: torch.device) -> None:
 
 def apply_fsdp2(model: torch.nn.Module, mesh, mp_policy=None,
                 reshard_after_forward: bool = True,
-                device: torch.device | None = None) -> torch.nn.Module:
+                device: torch.device | None = None,
+                shard_head: bool = False) -> torch.nn.Module:
     """Shard ``model`` with FSDP2, one shard group per transformer block.
 
     Children must be sharded before the root so that the root only owns the
@@ -125,6 +126,15 @@ def apply_fsdp2(model: torch.nn.Module, mesh, mp_policy=None,
         fully_shard(block, mesh=mesh, mp_policy=mp_policy,
                     reshard_after_forward=reshard_after_forward)
 
+    if shard_head:
+        # MTP heads call the LM head outside the base model's forward, so it
+        # needs its own shard group (its pre-forward hook then unshards it).
+        head = getattr(base, "head", None)
+        if head is not None:
+            head.to(device)
+            fully_shard(head, mesh=mesh, mp_policy=mp_policy,
+                        reshard_after_forward=False)
+
     # emb / head / ln_out / any adapter that sits outside the blocks
     _move_unsharded(model, device)
     fully_shard(model, mesh=mesh, mp_policy=mp_policy,
@@ -135,6 +145,23 @@ def apply_fsdp2(model: torch.nn.Module, mesh, mp_policy=None,
 # --------------------------------------------------------------------------- #
 # checkpointing
 # --------------------------------------------------------------------------- #
+def apply_fsdp2_flat(module: torch.nn.Module, mesh, mp_policy=None,
+                     device: torch.device | None = None) -> torch.nn.Module:
+    """Shard a single (small) module as one flat parameter group.
+
+    Used for auxiliary modules such as the MTP heads that live outside the
+    transformer blocks: without this their gradients would never be reduced.
+    """
+    from torch.distributed.fsdp import fully_shard
+
+    if mp_policy is None:
+        mp_policy = build_mixed_precision_policy()
+    if device is not None:
+        module.to(device)
+    fully_shard(module, mesh=mesh, mp_policy=mp_policy)
+    return module
+
+
 def gather_model_state_dict(model: torch.nn.Module) -> dict:
     """Full state dict (plain CPU tensors) of a possibly sharded model.
 

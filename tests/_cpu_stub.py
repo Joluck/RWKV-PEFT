@@ -149,7 +149,7 @@ def build_args(version: str, grad_cp: int = 0, train_type: str = "none"):
 
 
 def load_model(version: str = "7", mode: str = "normal", grad_cp: int = 0,
-               seed: int = 0):
+               seed: int = 0, patch_kernels: bool = True):
     """(Re)build a tiny model for ``version``/``mode`` and return (model, args).
 
     The operator module branches on env vars at import time, so every reload
@@ -160,7 +160,8 @@ def load_model(version: str = "7", mode: str = "normal", grad_cp: int = 0,
     install_rwkvfla_stub()
     for name in [m for m in sys.modules if m.startswith("rwkvt.")]:
         del sys.modules[name]
-    patch_ops()
+    if patch_kernels:
+        patch_ops()
 
     module = importlib.import_module(f"rwkvt.rwkv{version}.model")
     args = build_args(version, grad_cp=grad_cp,

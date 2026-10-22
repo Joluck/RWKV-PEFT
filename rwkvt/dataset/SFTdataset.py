@@ -79,7 +79,9 @@ def sft_dataset(args):
         train_tokenize_function,
         batched=True,
         batch_size=3000,
-        num_proc=args.sft_num_proc,
+        # datasets only accepts num_proc > 1; 0/1 means "single process",
+        # which also avoids forking tokeniser workers under NCCL
+        num_proc=args.sft_num_proc if args.sft_num_proc and args.sft_num_proc > 1 else None,
         remove_columns=raw.column_names,
         load_from_cache_file=True,
         desc="Running tokenizer on train dataset",

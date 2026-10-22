@@ -57,13 +57,38 @@ class RWKV(pl.LightningModule):
         else:
             self.criterion = nn.CrossEntropyLoss()
 
+        # multi-token prediction: frozen base model + trainable MTP blocks
+        self.mtp = None
+        self._last_mtp_steps: dict = {}
+        if getattr(args, "peft", "none") == "mtp":
+            from rwkvt.mtp import MTPHead
+
+            self.mtp = MTPHead(args, depth=getattr(args, "mtp_depth", 1))
+            n_mtp = sum(p.numel() for p in self.mtp.parameters())
+            print(f"[mtp] depth={self.mtp.depth}, {n_mtp / 1e6:.1f}M trainable params")
+            mtp_load = getattr(args, "mtp_load", "")
+            if mtp_load:
+                state = torch.load(mtp_load, map_location="cpu")
+                state = {k[len("mtp."):] if k.startswith("mtp.") else k: v
+                         for k, v in state.items()}
+                missing, unexpected = self.mtp.load_state_dict(state, strict=False)
+                if unexpected:
+                    raise RuntimeError(
+                        f"{mtp_load}: unexpected MTP keys {unexpected[:3]}; "
+                        "this checkpoint was not produced by this layout")
+                if missing:
+                    print(f"[mtp] {mtp_load}: {len(missing)} key(s) initialised "
+                          f"fresh, e.g. {missing[:2]}")
+
     # -- optimiser -------------------------------------------------------- #
     def _parameter_groups(self):
         args = self.args
         lr_decay, lr_1x, lr_2x, lr_3x = set(), set(), set(), set()
         layerwise = args.layerwise_lr > 0
         stage2 = args.my_pile_stage == 2
-        for name, p in self.model.named_parameters():
+        # iterate the whole LightningModule: for --peft mtp the trainable heads
+        # live in `self.mtp`, outside `self.model`
+        for name, p in self.named_parameters():
             if not p.requires_grad:
                 continue
             is_1d = p.squeeze().dim() < 2
@@ -82,7 +107,7 @@ class RWKV(pl.LightningModule):
             else:
                 lr_1x.add(name)
 
-        param_dict = dict(self.model.named_parameters())
+        param_dict = dict(self.named_parameters())
         scale_2x = 5.0 if args.my_pile_stage == 2 else 2.0
         scale_3x = 5.0 if args.my_pile_stage == 2 else 3.0
         groups = [{"params": [param_dict[n] for n in sorted(lr_1x)],
@@ -117,10 +142,13 @@ class RWKV(pl.LightningModule):
         except ImportError:
             FusedAdam = None
 
-        if FusedAdam is not None and torch.cuda.is_available():
+        # the module can still be on CPU (``--accelerator cpu``) on a GPU box,
+        # so look at its device instead of plain availability
+        on_cuda = "cuda" in str(getattr(self, "device", "cpu"))
+        if FusedAdam is not None and on_cuda:
             return FusedAdam(groups, bias_correction=True,
                              adam_w_mode=args.weight_decay > 0, **kwargs)
-        return torch.optim.AdamW(groups, fused=torch.cuda.is_available(), **kwargs)
+        return torch.optim.AdamW(groups, fused=on_cuda, **kwargs)
 
     @property
     def deepspeed_offload(self) -> bool:
@@ -144,16 +172,51 @@ class RWKV(pl.LightningModule):
     def _shared_step(self, batch):
         if self.args.data_type == "sft":
             idx, targets, mask = batch
-            logits = self(idx, attention_mask=mask)
+            kwargs = {"attention_mask": mask}
         else:
             idx, targets = batch
-            logits = self(idx)
+            kwargs = {}
+
+        if self.mtp is not None:
+            logits, hidden, token_embeds = self(idx, return_hidden=True, **kwargs)
+            loss = self._mtp_loss(hidden, token_embeds, targets, logits)
+            return loss, logits
+
+        logits = self(idx, **kwargs)
         loss = self.criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
         return loss, logits
+
+    def _mtp_loss(self, hidden, token_embeds, targets, logits):
+        args = self.args
+        main_loss = self.criterion(logits.view(-1, logits.size(-1)),
+                                   targets.view(-1))
+        beta = float(getattr(args, "mtp_step_beta", 0.6))
+        step_weights = self.mtp.step_weights(beta, self.mtp.depth) if beta else None
+        mtp_loss = self.mtp.loss(hidden, token_embeds, targets,
+                                 self.model.head, self.criterion,
+                                 step_weights=step_weights, base_logits=logits)
+        self._last_mtp_steps = {
+            f"mtp_loss_{i + 1}": value
+            for i, value in enumerate(self.mtp.last_step_losses)}
+        self._last_mtp_steps.update({
+            f"accept_{i + 1}": value
+            for i, value in enumerate(self.mtp.last_step_accept)})
+        self._last_main_loss = float(main_loss.detach())
+        self._last_mtp_loss = float(mtp_loss.detach())
+        self.log("train/main_loss", main_loss.detach(), on_step=True,
+                 on_epoch=False, logger=False)
+        self.log("train/mtp_loss", mtp_loss.detach(), on_step=True,
+                 on_epoch=False, logger=False)
+        return (args.mtp_main_weight * main_loss
+                + args.mtp_loss_weight * mtp_loss)
 
     def training_step(self, batch, batch_idx):
         if not self._infctx():
             loss, logits = self._shared_step(batch)
+            if self.mtp is not None:
+                # L2Wrap is a pretraining regulariser; with a frozen base model
+                # it would not train anything, so it is skipped here.
+                return loss
             return L2Wrap.apply(loss, logits, None)
         return self._infctx_training_step(batch)
 
@@ -207,7 +270,7 @@ class FSDP2RWKV(RWKV):
     """
 
     def configure_model(self) -> None:
-        from rwkvt.fsdp import apply_fsdp2, is_fsdp2
+        from rwkvt.fsdp import apply_fsdp2, apply_fsdp2_flat, is_fsdp2
 
         if not is_fsdp2(self.trainer.strategy):
             return  # not an FSDP2 run: nothing to do
@@ -218,5 +281,8 @@ class FSDP2RWKV(RWKV):
                 "start the run with --strategy fsdp2")
         # FSDP2 requires params on the mesh device before sharding; the helper
         # moves them block-by-block so the full model never has to fit on one GPU.
-        apply_fsdp2(self.model, mesh,
-                    device=self.trainer.strategy.root_device)
+        device = self.trainer.strategy.root_device
+        apply_fsdp2(self.model, mesh, device=device,
+                    shard_head=self.mtp is not None)
+        if self.mtp is not None:
+            apply_fsdp2_flat(self.mtp, mesh, device=device)

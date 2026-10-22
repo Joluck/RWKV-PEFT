@@ -135,3 +135,32 @@ def test_inputs_embeds_is_rejected():
     idx = torch.randint(1, args.vocab_size, (2, args.ctx_len))
     with pytest.raises(NotImplementedError, match="inputs_embeds"):
         model(idx, inputs_embeds=torch.zeros(2, args.ctx_len, args.n_embd))
+
+
+def test_fla_backend_wrapper_shapes():
+    """rwkv-fla returns (B, T, H, C/H); the wrapper path must stay 3-D safe."""
+    model, args = stub.load_model(version="7", mode="normal", patch_kernels=False)
+    idx = torch.randint(1, args.vocab_size, (2, args.ctx_len))
+    with torch.no_grad():
+        logits = model(idx)
+    assert logits.shape == (2, args.ctx_len, args.vocab_size)
+    assert torch.isfinite(logits).all()
+
+
+def test_bf16_true_casts_fp32_checkpoint(tmp_path):
+    """--precision bf16-true must downcast an fp32 checkpoint before training."""
+    from types import SimpleNamespace
+
+    from rwkvt.peft_loading import build_model
+
+    model, args = stub.load_model(version="7", mode="normal")
+    ckpt = tmp_path / "fp32.pth"
+    torch.save({k: v.clone() for k, v in model.state_dict().items()}, ckpt)
+
+    ns = SimpleNamespace(**vars(args))
+    ns.load_model = str(ckpt)
+    ns.load_partial = 0
+    ns.precision = "bf16-true"
+    loaded = build_model(ns)
+    assert loaded.emb.weight.dtype == torch.bfloat16
+    assert all(p.dtype == torch.bfloat16 for p in loaded.parameters())

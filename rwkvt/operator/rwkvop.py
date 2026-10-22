@@ -16,6 +16,23 @@ import os
 import torch
 from einops import rearrange
 
+# head size of the running model: the fla/triton wrappers must use it instead of
+# a hard-coded 64, otherwise --head_size_a != 64 reshapes into garbage.
+_HEAD_SIZE = int(os.environ.get("RWKV_HEAD_SIZE_A", 64))
+
+
+def _require_dtype(tensors, dtype, names=("r", "w", "k", "v", "a", "b")):
+    """Fail with the actual dtypes instead of a bare ``AssertionError``."""
+    got = [t.dtype for t in tensors]
+    if not all(d is dtype for d in got):
+        detail = ", ".join(f"{n}={d}" for n, d in zip(names, got, strict=True))
+        raise AssertionError(
+            f"the RWKV-7 kernel needs {dtype} inputs, got {detail}. "
+            "`--precision bf16` only enables autocast and keeps the checkpoint "
+            "dtype, so an fp32 checkpoint stays fp32 (elementwise ops such as "
+            "`w0 + tanh(...)` promote back to fp32). Use `--precision bf16-true`, "
+            "or convert the checkpoint to bf16 first.")
+
 
 def RUN_CUDA_RWKV7g():
     raise NotImplementedError('RUN_CUDA_RUN_KV not implemented')
@@ -41,7 +58,7 @@ if os.environ["WKV"] == 'fla':
     if 'x070' in os.environ["RWKV_MY_TESTING"]:
         from rwkvfla.ops.rwkv7 import chunk_rwkv7
         if os.environ["RWKV_TRAIN_TYPE"] == 'infctx':
-            def RUN_RWKV7_INFCTX(r, k, v, w, a, b, s, HEAD_SIZE=64): # for State-tuning, infctx
+            def RUN_RWKV7_INFCTX(r, k, v, w, a, b, s, HEAD_SIZE=_HEAD_SIZE): # for State-tuning, infctx
                 B,T,HC = w.shape
                 C = HEAD_SIZE
                 H = HC//C
@@ -50,7 +67,7 @@ if os.environ["WKV"] == 'fla':
                 o, state = chunk_rwkv7(r=r, w=w, k=k, v=v, a=a, b=b, scale=1.0, initial_state=s, output_final_state=True, head_first=False)
                 return o, state
         if os.environ["RWKV_TRAIN_TYPE"] == 'state':
-            def RUN_RWKV7_STATE(r, k, v, w, a, b, s, HEAD_SIZE=64): # for State-tuning, infctx
+            def RUN_RWKV7_STATE(r, k, v, w, a, b, s, HEAD_SIZE=_HEAD_SIZE): # for State-tuning, infctx
                 B,T,HC = w.shape
                 C = HEAD_SIZE
                 H = HC//C
@@ -60,7 +77,7 @@ if os.environ["WKV"] == 'fla':
                 o, state = chunk_rwkv7(r=r, w=w, k=k, v=v, a=a, b=b, scale=1.0, initial_state=s, output_final_state=True, head_first=False)
                 return o, state
         else:
-            def RUN_CUDA_RWKV7g(r,w,k,v,a,b, HEAD_SIZE=64): #compatible with cuda implement
+            def RUN_CUDA_RWKV7g(r,w,k,v,a,b, HEAD_SIZE=_HEAD_SIZE): #compatible with cuda implement
                 B,T,HC = w.shape
                 C = HEAD_SIZE
                 H = HC//C
@@ -120,7 +137,7 @@ else:
                     def forward(ctx,s0,r,w,k,v,a,b):
                         B,T,H,C = r.shape
                         assert T%CHUNK_LEN == 0
-                        assert all(i.dtype==torch.bfloat16 for i in [r,w,k,v,a,b])
+                        _require_dtype([r,w,k,v,a,b], torch.bfloat16)
                         assert all(i.is_contiguous() for i in [s0,r,w,k,v,a,b])
                         assert s0.dtype==torch.float
                         y = torch.empty_like(v)
@@ -194,7 +211,7 @@ else:
                     def forward(ctx,r,w,k,v,a,b):
                         B,T,H,C = r.shape
                         assert T%CHUNK_LEN == 0
-                        assert all(i.dtype==torch.bfloat16 for i in [r,w,k,v,a,b])
+                        _require_dtype([r,w,k,v,a,b], torch.bfloat16)
                         assert all(i.is_contiguous() for i in [r,w,k,v,a,b])
                         y = torch.empty_like(v)
                         s = torch.empty(B,H,T//CHUNK_LEN,C,C, dtype=torch.float32,device=w.device)

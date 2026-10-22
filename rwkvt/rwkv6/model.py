@@ -30,18 +30,22 @@ class RWKV6(HFCompatibleModel, nn.Module):
             return self.forward_infctx(*args, **kwargs)
         return self.forward_normal(*args, **kwargs)
 
-    def forward_normal(self, input_ids, attention_mask=None, **kwargs):
+    def forward_normal(self, input_ids, attention_mask=None, return_hidden=False,
+                       **kwargs):
         drop_unsupported_kwargs("RWKV6", kwargs)
         args = self.args
         B, T = input_ids.size()
         assert args.ctx_len >= T, "Cannot forward, model ctx_len is exhausted."
 
         x = self.emb(input_ids)
+        token_embeds = x
         for block in self.blocks:
             x = (checkpoint_block(args, block, x, attention_mask)
                  if args.grad_cp == 1 else block(x, attention_mask))
 
-        return self.head(self.ln_out(x))
+        x = self.ln_out(x)
+        logits = self.head(x)
+        return (logits, x, token_embeds) if return_hidden else logits
 
     def forward_infctx(self, input_ids, last_shift_states: torch.Tensor,
                        last_wkv_states: torch.Tensor, attention_mask=None,
@@ -68,4 +72,5 @@ class RWKV6(HFCompatibleModel, nn.Module):
                 out = block(x, attention_mask, last_state=block_state)
             x, new_states[i] = out
 
-        return self.head(self.ln_out(x)), new_states.shift_states, new_states.wkv_states
+        x = self.ln_out(x)
+        return self.head(x), new_states.shift_states, new_states.wkv_states

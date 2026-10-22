@@ -74,6 +74,7 @@ python train.py \
 | 中间 epoch 保存会做一次全量聚合 | 建议 `--merge 0` + 较大的 `--epoch_save`，只在最后合并 |
 | Lightning `ModelParallelStrategy` 是实验 API | 版本敏感（要求 ≥2.5），升级 Lightning 后需回归 §3 的用例 |
 | `--peft prefix` | 未测试，启动时告警 |
+| 多进程 DataLoader | CUDA/NCCL 初始化后 fork worker 可能触发 glibc mutex 崩溃；脚本默认 `NUM_WORKERS=0`，需要并行加载时用 `WORKER_START_METHOD=spawn` + `PERSISTENT_WORKERS=1` |
 | 自定义 WKV autograd Function | 已验证可用（只接触激活，不持有参数） |
 
 ## 5. 为什么值得做
@@ -105,13 +106,15 @@ FSDP2 是新增选项，默认行为不变，现有用户零感知。
 
 | 脚本 | 用途 |
 | --- | --- |
-| `scripts/run_lora_13b_fsdp2.sh` | RWKV-7 13.3B(g1k) + LoRA + MetaMathQA SFT，默认 8 卡 FSDP2、只存 adapter |
+| `scripts/run_13b_fsdp2.sh` | RWKV-7 13.3B(g1k) + LoRA + MetaMathQA SFT，默认 8 卡 FSDP2、只存 adapter |
+| `scripts/mtp.sh` | 同上但走 MTP：冻结底座、只训 MTP 头（输出 `rwkv-N-mtp.pth`） |
 | `merge/merge_lora.py` | 把 `rwkv-N-adapter.pth` 合并回完整权重（`--merge 0` 的配套） |
 
 ```bash
 # 训练（DRY_RUN=1 只打印命令）
-bash scripts/run_lora_13b_fsdp2.sh
-DEVICES=4 bash scripts/run_lora_13b_fsdp2.sh
+bash scripts/run_13b_fsdp2.sh   # LoRA
+bash scripts/mtp.sh             # MTP（冻结底座）
+DEVICES=4 bash scripts/run_13b_fsdp2.sh
 
 # 事后合并
 python merge/merge_lora.py \

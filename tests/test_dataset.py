@@ -211,6 +211,7 @@ def test_sft_dataset_truncates_to_epoch_steps(monkeypatch):
 
         def map(self, *args, **kwargs):
             self.mapped = True
+            self.map_kwargs = kwargs
             return self
 
     raw = _Raw()
@@ -222,6 +223,7 @@ def test_sft_dataset_truncates_to_epoch_steps(monkeypatch):
     sft.sft_dataset(args)
     assert raw.selected == list(range(10))
     assert raw.mapped
+    assert raw.map_kwargs["num_proc"] is None  # 1 process = no fork pool
 
 
 def test_sft_dataset_keeps_everything_without_epoch_steps(monkeypatch):
@@ -246,3 +248,28 @@ def test_sft_dataset_keeps_everything_without_epoch_steps(monkeypatch):
                            sft_field=["q", "a"], sft_num_proc=1,
                            epoch_steps=0, ctx_len=8)
     sft.sft_dataset(args)
+
+
+def test_datamodule_setup_is_idempotent(tmp_path, monkeypatch):
+    pytest.importorskip("lightning")
+    import rwkvt.dataset.datamodule as dm
+
+    write_binidx(str(tmp_path / "toy"), DOCS)
+    args = SimpleNamespace(data_type="binidx", data_file=str(tmp_path / "toy"),
+                           ctx_len=4, epoch_steps=10, dataload="pad",
+                           micro_bsz=2, data_shuffle=0, num_workers=0,
+                           persistent_workers=False, prefetch_factor=None,
+                           worker_start_method="fork")
+    calls = []
+    real_dataset = dm.MyDataset
+
+    def spy(a):
+        calls.append(1)
+        return real_dataset(a)
+
+    monkeypatch.setattr(dm, "MyDataset", spy)
+    module = dm.MyDataModule(args)
+    module.setup()
+    module.setup()
+    assert len(calls) == 1
+    assert len(module.train_dataloader()) == 2  # 3 docs / bsz 2, drop_last=False

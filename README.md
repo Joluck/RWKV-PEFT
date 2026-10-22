@@ -133,6 +133,8 @@ Note: Please refer to the RWKV official tutorial for detailed data preparation
 - **Flexible Data Loading**: binidx (mmap, `pad`/`only` sampling), jsonl and SFT datasets
 - **Memory Optimization**: DeepSpeed ZeRO strategies, gradient checkpointing, meta-device weight loading
 - **Loss Masking**: prompt tokens are masked out automatically for SFT
+- **Multi-Token Prediction (MTP)**: `--peft mtp` freezes the base model and trains
+  DeepSeek-V3-style MTP heads that predict the next `--mtp_depth` tokens
 - **FSDP2**: `--strategy fsdp2` shards the frozen base weights across GPUs
   (`fully_shard`), with aggregated checkpoint saving; see [docs/fsdp2评估.md](docs/fsdp2评估.md)
 - **Infinite Context Training**: Supports infctx training mode, utilizing RWKV's constant memory usage advantage to train with "infinite" context under limited resources
@@ -168,6 +170,26 @@ Available strategies:
 - deepspeed_stage_2_offload
 - deepspeed_stage_3_offload
 
+### Multi-Token Prediction (frozen base)
+
+```bash
+--peft mtp --mtp_depth 1 --mtp_loss_weight 0.3
+```
+
+- every base parameter is frozen; only the MTP heads (`--mtp_depth` blocks) train
+- depth `k` fuses the previous hidden state with the embedding of token `i+k`,
+  runs a channel-mix block and reuses the frozen LM head to predict token `i+k+1`
+- loss = `mtp_loss_weight * mean_k(CE_k) + mtp_main_weight * CE(next token)`;
+  with `mtp_main_weight=0` the weight is only a global scale (Adam is scale-invariant)
+  `--mtp_main_weight` defaults to 0 because the frozen base cannot learn, and both
+  terms are written to `loss_data.jsonl` as `main_loss` / `mtp_loss`
+- checkpoints contain just the heads (`rwkv-N-mtp.pth`); resume with `--mtp_load`
+- MTP heads are training-time only: drop them at inference, the base is unchanged
+- draft/verify decoder + acceptance stats: `rwkvt/spec_decode.py`;
+  design notes and the vLLM comparison: [docs/mtp.md](docs/mtp.md)
+- ready-to-run 13B script: `bash scripts/mtp.sh` (`DRY_RUN=1` only prints the command;
+  wandb is on by default - `WANDB=` disables it, `WANDB_MODE=offline` keeps it local)
+
 ### FSDP2 (recommended when the base weights do not fit per GPU)
 
 ```bash
@@ -176,9 +198,12 @@ Available strategies:
 
 - shards every transformer block (frozen base included) with `torch.distributed.fsdp.fully_shard`
 - checkpoints are gathered to a single file on rank 0; `--merge 0` saves the adapter only
-- requires `torch>=2.4` and `lightning>=2.5`, `--precision bf16`
+- requires `torch>=2.4` and `lightning>=2.5`; FSDP2 automatically uses
+  `--precision bf16-true` (a plain `bf16` only enables autocast and would keep
+  an fp32 checkpoint in fp32, which the WKV kernels reject)
   ```bash
-  bash scripts/run_lora_13b_fsdp2.sh      # 13.3B + LoRA + MetaMathQA SFT
+  bash scripts/run_13b_fsdp2.sh                  # 13.3B + LoRA + MetaMathQA
+  bash scripts/mtp.sh                            # 13.3B + MTP (base frozen)
   ```
 - details and limitations: [docs/fsdp2评估.md](docs/fsdp2评估.md)
 
@@ -188,6 +213,14 @@ However, you can use `--op fla` to enable the Triton kernel:
 ```
 --op cuda/fla
 ```
+
+### Troubleshooting
+
+| symptom | cause / fix |
+| --- | --- |
+| `Fatal glibc error: pthread_mutex_lock ... __owner == 0` | forking a DataLoader/tokenizer worker after CUDA+NCCL started. Run with `NUM_WORKERS=0` (default in the 13B scripts) or `NUM_WORKERS=8 WORKER_START_METHOD=spawn PERSISTENT_WORKERS=1` |
+| `AssertionError` in `rwkvop.py` about bf16 | the checkpoint is fp32 and `--precision bf16` only enables autocast; use `--precision bf16-true` (FSDP2 does it automatically) |
+| `TypeError: ... unexpected keyword argument 'inputs_embeds'` | old PEFT path; this repo handles HF kwargs via `drop_unsupported_kwargs` |
 
 ## Development
 

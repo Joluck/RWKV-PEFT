@@ -77,6 +77,17 @@ def build_model_from_state_dict(args, state_dict: dict, allow_missing: bool = Fa
     if unexpected and warn_unexpected:
         print(f"[load] ignoring {len(unexpected)} unexpected key(s), e.g. {unexpected[:5]}")
     _materialize_meta_params(model)
+
+    precision = str(getattr(args, "precision", ""))
+    src_dtype = model.emb.weight.dtype
+    if precision == "bf16-true" and src_dtype != torch.bfloat16:
+        # cast once, before any FSDP2 sharding: the WKV kernels need bf16 and
+        # `--precision bf16` (autocast) would leave the params in fp32
+        model = model.to(torch.bfloat16)
+        print(f"[load] cast weights {src_dtype} -> bfloat16 (--precision bf16-true)")
+    elif "bf16" in precision and src_dtype != torch.bfloat16:
+        print(f"[load] WARNING: checkpoint weights are {src_dtype} but the WKV "
+              f"kernels need bf16; rerun with --precision bf16-true")
     return model
 
 
@@ -144,12 +155,14 @@ def freeze_except_state(model: nn.Module) -> None:
 
 def load_peft_model(args):
     """Build the model, apply the tuning method and wrap it for Lightning."""
-    if args.peft not in ("none", "state") and args.peft not in PEFT_CONFIGS:
+    if args.peft not in ("none", "state", "mtp") and args.peft not in PEFT_CONFIGS:
         raise ValueError(f"unsupported --peft {args.peft!r}")
 
     model = build_model(args)
 
-    if args.peft == "state":
+    if args.peft == "mtp":
+        model.requires_grad_(False)  # only the MTP heads (in the module) train
+    elif args.peft == "state":
         if os.environ.get("RWKV_TRAIN_TYPE") != "state":
             raise RuntimeError("state tuning requires RWKV_TRAIN_TYPE=state "
                                "(set automatically by --peft state)")

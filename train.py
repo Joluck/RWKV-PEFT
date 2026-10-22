@@ -15,7 +15,7 @@ from argparse import ArgumentParser, Namespace
 SUPPORTED_VERSIONS = ("5", "6", "7")
 SUPPORTED_DATA_TYPES = ("binidx", "sft", "jsonl")
 SUPPORTED_TRAIN_TYPES = ("none", "state", "infctx", "fullstate")
-SUPPORTED_PEFT = ("none", "state", "lora", "miss", "adalora", "prefix")
+SUPPORTED_PEFT = ("none", "state", "mtp", "lora", "miss", "adalora", "prefix")
 
 
 def build_parser() -> ArgumentParser:
@@ -46,6 +46,20 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--merge", type=int, default=1,
                         help="1 = save merged weights, 0 = save the adapter only")
 
+    # ---- multi-token prediction (--peft mtp) -----------------------------
+    parser.add_argument("--mtp_depth", type=int, default=1,
+                        help="number of extra tokens predicted per position")
+    parser.add_argument("--mtp_loss_weight", type=float, default=0.3,
+                        help="weight of the MTP loss term")
+    parser.add_argument("--mtp_main_weight", type=float, default=0.0,
+                        help="weight of the main next-token loss; 0 by default "
+                             "because the frozen base cannot learn, the term is "
+                             "still reported as main_loss")
+    parser.add_argument("--mtp_load", type=str, default="",
+                        help="optional MTP checkpoint to initialise from")
+    parser.add_argument("--mtp_step_beta", type=float, default=0.6,
+                        help="FastMTP per-depth weight decay beta; 1.0 = uniform")
+
     # ---- data ------------------------------------------------------------
     parser.add_argument("--data_file", default="", type=str)
     parser.add_argument("--data_type", default="binidx", type=str,
@@ -60,7 +74,13 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--sft_field", default=None, type=str, nargs="+",
                         help="dataset columns holding prompt / answer")
     parser.add_argument("--sft_split", default="train", type=str)
-    parser.add_argument("--sft_num_proc", default=32, type=int)
+    parser.add_argument("--sft_num_proc", default=8, type=int,
+                        help="tokenisation processes; 0 = single process (safest "
+                             "under distributed training)")
+    parser.add_argument("--worker_start_method", default="fork", type=str,
+                        choices=("fork", "spawn"),
+                        help="DataLoader worker start method; use 'spawn' if you "
+                             "hit 'Fatal glibc error: pthread_mutex_lock'")
     parser.add_argument("--tokenizer_path", default="RWKV/rwkv-5-world-3b", type=str)
 
     # ---- optimisation ----------------------------------------------------
@@ -71,6 +91,14 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--epoch_count", default=500, type=int)
     parser.add_argument("--epoch_begin", default=0, type=int,
                         help="epoch offset used when naming checkpoints")
+    parser.add_argument("--accept_every", default=0, type=int,
+                        help="measure the speculative-decoding acceptance rate "
+                             "every N steps (0 = off); logs accept/* to wandb")
+    parser.add_argument("--accept_prompts", default=8, type=int)
+    parser.add_argument("--accept_tokens", default=32, type=int)
+    parser.add_argument("--save_per_step", default=0, type=int,
+                        help="save a checkpoint every N steps (0 = only per "
+                             "epoch); files are named rwkv-<epoch>-step<N>.pth")
     parser.add_argument("--epoch_save", default=5, type=int,
                         help="save every N epochs, 0 disables intermediate saves")
     parser.add_argument("--lr_init", default=6e-4, type=float)
@@ -104,6 +132,11 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--proj_dir", default="out", type=str)
     parser.add_argument("--wandb", default="", type=str,
                         help="wandb project name, empty disables logging")
+    parser.add_argument("--wandb_mode", default="online", type=str,
+                        choices=("online", "offline", "disabled"),
+                        help="online = upload, offline = local only")
+    parser.add_argument("--wandb_run_name", default="", type=str,
+                        help="defaults to '<run_name> <timestamp>'")
     parser.add_argument("--random_seed", default="-1", type=int)
     parser.add_argument("--accelerator", default="gpu", type=str)
     parser.add_argument("--strategy", default="auto", type=str,
@@ -111,7 +144,10 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--devices", default=1, type=int)
     parser.add_argument("--num_nodes", default=1, type=int)
     parser.add_argument("--precision", default="bf16", type=str,
-                        choices=("fp32", "tf32", "fp16", "bf16"))
+                        choices=("fp32", "tf32", "fp16", "bf16", "bf16-true"),
+                        help="bf16 = autocast (keeps checkpoint dtype), "
+                             "bf16-true = cast the whole model to bf16; required "
+                             "by the CUDA kernels when the checkpoint is fp32")
     parser.add_argument("--accumulate_grad_batches", default=1, type=int)
     return parser
 
@@ -131,12 +167,29 @@ def finalize_args(args: Namespace) -> Namespace:
     if args.data_type == "sft" and not args.sft_field:
         raise SystemExit("--sft_field is required for --data_type sft")
     args.fsdp2 = args.strategy == "fsdp2"
+    if args.fsdp2 and args.precision == "bf16":
+        warnings.warn(
+            "FSDP2 + `bf16` keeps the parameters in their checkpoint dtype; "
+            "the WKV CUDA kernels need bf16, so `--precision bf16-true` is used",
+            stacklevel=2)
+        args.precision = "bf16-true"
     if args.fsdp2 and args.precision == "fp16":
         raise SystemExit("--strategy fsdp2 supports fp32/bf16 only (fp16 master "
                          "weights are unstable under FSDP2)")
     if args.fsdp2 and args.peft == "prefix":
         warnings.warn("prefix tuning under FSDP2 is untested; prefer lora/miss/state",
                       stacklevel=2)
+    if args.peft == "mtp":
+        if args.mtp_depth < 1:
+            raise SystemExit("--mtp_depth must be >= 1")
+        if args.train_type == "infctx":
+            raise SystemExit("MTP is not supported together with --train_type infctx")
+        if args.mtp_depth >= args.ctx_len - 1:
+            raise SystemExit(
+                f"--mtp_depth {args.mtp_depth} needs ctx_len > depth + 1 "
+                f"(got ctx_len {args.ctx_len}); depth 1-4 is the useful range")
+        if args.mtp_load and not os.path.exists(args.mtp_load):
+            raise SystemExit(f"--mtp_load {args.mtp_load} does not exist")
     if args.op == "cuda" and args.precision in ("fp16", "tf32"):
         raise SystemExit(
             f"--precision {args.precision} is not supported by the bundled WKV "
@@ -162,7 +215,8 @@ def finalize_args(args: Namespace) -> Namespace:
     os.environ["RWKV_TRAIN_TYPE"] = train_type
     os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
-    os.environ["RWKV_FLOAT_MODE"] = "fp32" if args.precision in ("fp32", "tf32") else args.precision
+    os.environ["RWKV_FLOAT_MODE"] = {"fp32": "fp32", "tf32": "fp32",
+                                     "fp16": "fp16"}.get(args.precision, "bf16")
     os.environ["RWKV_JIT_ON"] = "0"
     os.environ["WKV"] = args.op
     os.environ["FUSED_KERNEL"] = "1" if args.fused_kernel else "0"
@@ -172,6 +226,8 @@ def finalize_args(args: Namespace) -> Namespace:
         args.precision = 32
     elif args.precision == "fp16":
         args.precision = 16
+    elif args.precision == "bf16-true":
+        args.precision = "bf16-true"
     else:
         args.precision = "bf16"
     args.use_tf32 = use_tf32
@@ -203,7 +259,7 @@ def main() -> None:
     rank_zero_info(f"model={args.my_testing} op={args.op} precision={args.precision}")
 
     from rwkvt.dataset.datamodule import MyDataModule
-    from rwkvt.lightning_train.trainer import train_callback
+    from rwkvt.lightning_train.trainer import accept_callback, train_callback
     from rwkvt.peft_loading import load_peft_model
 
     args, model = load_peft_model(args)
@@ -215,6 +271,11 @@ def main() -> None:
         strategy = build_fsdp2_strategy(args.devices, args.num_nodes)
         rank_zero_info(f"FSDP2 enabled (mesh: dp x 1 = {args.devices} device(s))")
 
+    # materialise the dataset before the DDP/FSDP2 strategy spawns processes:
+    # forking tokeniser workers after NCCL init can trip glibc mutex checks
+    data_module = MyDataModule(args)
+    data_module.setup()
+
     trainer = Trainer(
         accelerator=args.accelerator,
         strategy=strategy,
@@ -222,7 +283,8 @@ def main() -> None:
         num_nodes=args.num_nodes,
         precision=args.precision,
         logger=False,
-        callbacks=[train_callback(args)],
+        callbacks=[train_callback(args)] + ([accept_callback(args)]
+                                            if args.accept_every > 0 else []),
         max_epochs=args.max_epochs,
         enable_checkpointing=False,
         num_sanity_val_steps=0,
@@ -230,7 +292,7 @@ def main() -> None:
         accumulate_grad_batches=args.accumulate_grad_batches,
         gradient_clip_val=1.0,
     )
-    trainer.fit(model, MyDataModule(args))
+    trainer.fit(model, data_module)
 
 
 if __name__ == "__main__":

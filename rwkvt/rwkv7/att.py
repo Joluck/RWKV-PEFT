@@ -207,9 +207,11 @@ class RWKV_Tmix_x070(nn.Module):
         return RUN_CUDA_RWKV7g(r, w, k, v, -kk, kk * a)
 
     def _output(self, x, r, k, v, g):
-        B, T, C = x.size()
+        # x is (B, T, C) for the CUDA kernel but (B, T, H, C/H) for rwkv-fla,
+        # so flatten with reshape instead of unpacking x.size()
+        B, T, C = r.size()
         H = self.n_head
-        x = self.ln_x(x.view(B * T, C)).view(B, T, C)
+        x = self.ln_x(x.reshape(B * T, C)).view(B, T, C)
         x = x + ((r.view(B, T, H, -1) * k.view(B, T, H, -1) * self.r_k)
                  .sum(dim=-1, keepdim=True) * v.view(B, T, H, -1)).view(B, T, C)
         return self.output(x * g)

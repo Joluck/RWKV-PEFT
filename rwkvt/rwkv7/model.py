@@ -35,13 +35,15 @@ class RWKV7(HFCompatibleModel, nn.Module):
             return self.forward_infctx(*args, **kwargs)
         return self.forward_normal(*args, **kwargs)
 
-    def forward_normal(self, input_ids, attention_mask=None, **kwargs):
+    def forward_normal(self, input_ids, attention_mask=None, return_hidden=False,
+                       **kwargs):
         drop_unsupported_kwargs("RWKV7", kwargs)
         args = self.args
         B, T = input_ids.size()
         assert args.ctx_len >= T, "Cannot forward, model ctx_len is exhausted."
 
         x = self.emb(input_ids)
+        token_embeds = x  # kept for MTP heads (frozen embeddings)
         v_first = torch.empty_like(x)
 
         for block in self.blocks:
@@ -51,7 +53,10 @@ class RWKV7(HFCompatibleModel, nn.Module):
                 x, v_first = block(x, v_first, attention_mask)
 
         x = self.ln_out(x)
-        return self.head(x)
+        logits = self.head(x)
+        if return_hidden:
+            return logits, x, token_embeds
+        return logits
 
     def forward_infctx(self, input_ids, last_shift_states: torch.Tensor,
                        last_wkv_states: torch.Tensor, attention_mask=None,

@@ -103,3 +103,37 @@ def test_finalize_rejects_fp16_with_fsdp2(tmp_path, restore_env):
          "--precision", "fp16", "--proj_dir", str(tmp_path / "out")])
     with pytest.raises(SystemExit, match="fsdp2"):
         train.finalize_args(args)
+
+
+def test_finalize_rejects_mtp_depth_longer_than_context(tmp_path, restore_env):
+    train = load_train_module()
+    ckpt = tmp_path / "model.pth"
+    ckpt.write_bytes(b"")
+    args = train.build_parser().parse_args(
+        ["--load_model", str(ckpt), "--peft", "mtp", "--mtp_depth", "8",
+         "--ctx_len", "8", "--proj_dir", str(tmp_path / "out")])
+    with pytest.raises(SystemExit, match="mtp_depth"):
+        train.finalize_args(args)
+
+
+def test_precision_bf16_true_is_kept(tmp_path, restore_env):
+    train = load_train_module()
+    ckpt = tmp_path / "model.pth"
+    ckpt.write_bytes(b"")
+    args = train.build_parser().parse_args(
+        ["--load_model", str(ckpt), "--precision", "bf16-true",
+         "--proj_dir", str(tmp_path / "out")])
+    args = train.finalize_args(args)
+    assert args.precision == "bf16-true"
+    assert os.environ["RWKV_FLOAT_MODE"] == "bf16"
+
+
+def test_fsdp2_switches_bf16_to_bf16_true(tmp_path, restore_env):
+    train = load_train_module()
+    ckpt = tmp_path / "model.pth"
+    ckpt.write_bytes(b"")
+    args = train.build_parser().parse_args(
+        ["--load_model", str(ckpt), "--strategy", "fsdp2",
+         "--proj_dir", str(tmp_path / "out")])
+    args = train.finalize_args(args)
+    assert args.precision == "bf16-true"

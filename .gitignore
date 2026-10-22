@@ -7,3 +7,14 @@ web/page/merge_page.py
 web/cache.yml
 *.Identifier
 .venv/
+# generated data / training artifacts (never commit these)
+data/
+out_*/
+out_mtp_tulu/
+*.pth
+*.bin
+*.idx
+*.jsonl
+accept_curve.jsonl
+loss_data.jsonl
+train_log.txt
